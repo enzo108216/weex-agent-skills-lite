@@ -22,6 +22,7 @@ README = ROOT / "README.md"
 MANIFEST = ROOT / "manifest.json"
 FILE_INDEX = ROOT / "file-index.json"
 REPO_README = REPO_ROOT / "README.md"
+ZH_REPO_README = REPO_ROOT / "README.zh-CN.md"
 AGENTS_GUIDE = REPO_ROOT / "AGENTS.md"
 CLAUDE_GUIDE = REPO_ROOT / "CLAUDE.md"
 COPILOT_GUIDE = REPO_ROOT / ".github" / "copilot-instructions.md"
@@ -52,7 +53,7 @@ TRADE_GUARD_SCRIPT = ROOT / "scripts" / "weex_trade_guard.py"
 API_DEFINITION_GENERATOR = ROOT / "scripts" / "generate_weex_api_definitions.py"
 REQUIREMENTS = ROOT / "requirements.txt"
 REQUIREMENTS_LOCK = ROOT / "requirements.lock"
-PUBLISHED_REPO_URL = "https://github.com/weex-labs/weex-trader-skill"
+PUBLISHED_REPO_URL = "https://github.com/weex-labs/weex-agent-skills"
 DOC_FILES = (
     SKILL,
     README,
@@ -318,11 +319,18 @@ class RepoConsistencyTests(unittest.TestCase):
     def test_readmes_reference_published_github_install_source(self) -> None:
         readme_text = README.read_text(encoding="utf-8")
         repo_readme_text = REPO_README.read_text(encoding="utf-8")
+        zh_readme_text = ZH_REPO_README.read_text(encoding="utf-8")
+        openclaw_script_text = OPENCLAW_UPDATE_SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn(PUBLISHED_REPO_URL, readme_text)
         self.assertIn(PUBLISHED_REPO_URL, repo_readme_text)
+        self.assertIn(PUBLISHED_REPO_URL, zh_readme_text)
+        self.assertIn(PUBLISHED_REPO_URL, openclaw_script_text)
+        self.assertIn('readonly APPROVED_COMMIT="', openclaw_script_text)
+        self.assertIn('readonly DEFAULT_BRANCH="main"', openclaw_script_text)
         self.assertNotIn("https://github.com/drgnchan/weex-trader-skill", readme_text)
         self.assertNotIn("https://github.com/drgnchan/weex-trader-skill", repo_readme_text)
+        self.assertNotIn("https://github.com/drgnchan/weex-trader-skill", zh_readme_text)
 
     def test_skill_identity_matches_manifest(self) -> None:
         skill_name = extract_frontmatter_name(SKILL.read_text(encoding="utf-8"))
@@ -344,6 +352,33 @@ class RepoConsistencyTests(unittest.TestCase):
         self.assertIn("out-of-range or stale number", skill_text)
         self.assertIn("show the current choices again", skill_text)
         self.assertIn("reuse that saved profile for later turns in the same conversation", skill_text)
+
+    def test_automated_authorization_requires_explicit_quota_and_bounded_activation(self) -> None:
+        skill_text = SKILL.read_text(encoding="utf-8")
+        readme_text = README.read_text(encoding="utf-8")
+        root_readme_text = REPO_README.read_text(encoding="utf-8")
+        zh_readme_text = ZH_REPO_README.read_text(encoding="utf-8")
+
+        for text in (skill_text, readme_text, root_readme_text):
+            self.assertIn(
+                "Never derive `max_total_amount` from frequency, validity, target amount, "
+                "max_single_amount, balance, or expected order count.",
+                text,
+            )
+            self.assertIn(
+                "A real-trading automation may become `ACTIVE` only in the same atomic "
+                "update that includes an `UNTIL` no later than the authorization expiry",
+                text,
+            )
+            self.assertIn(
+                "If the runtime cannot update status and expiry atomically, keep the "
+                "automation `PAUSED`.",
+                text,
+            )
+
+        self.assertIn("不得根据频率、有效期、目标金额、单笔上限、余额或预计笔数推算", zh_readme_text)
+        self.assertIn("`ACTIVE` 和不晚于授权到期时间的 `UNTIL`", zh_readme_text)
+        self.assertIn("同一次原子更新中同时写入", zh_readme_text)
 
     def test_skill_documents_localized_user_facing_trading_mode_labels(self) -> None:
         skill_text = SKILL.read_text(encoding="utf-8")
@@ -437,12 +472,15 @@ class RepoConsistencyTests(unittest.TestCase):
 
         self.assertEqual(offenders, [])
 
-    def test_skill_frontmatter_declares_compatibility(self) -> None:
-        compatibility = extract_frontmatter_field(SKILL.read_text(encoding="utf-8"), "compatibility")
+    def test_skill_body_declares_compatibility(self) -> None:
+        skill_text = SKILL.read_text(encoding="utf-8")
+        frontmatter = skill_text.split("---", 2)[1]
+        body = skill_text.split("---", 2)[2]
 
-        self.assertIn("Python", compatibility)
-        self.assertIn("network", compatibility)
-        self.assertIn("Tk", compatibility)
+        self.assertNotIn("compatibility:", frontmatter)
+        self.assertIn("Python", body)
+        self.assertIn("network", body)
+        self.assertIn("Tk", body)
 
     def test_documented_repo_paths_exist(self) -> None:
         referenced_paths: set[str] = set()
@@ -824,6 +862,32 @@ class RepoConsistencyTests(unittest.TestCase):
         self.assertEqual(task_map["preview TP/SL conditional-order risk"], preview_files)
         self.assertEqual(task_map["confirm a TP/SL conditional order"], confirm_files)
 
+    def test_manifest_routes_automated_recovery_and_notification_operations(self) -> None:
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        task_map = manifest["routing"]["task_map"]
+        domain = manifest["routing"]["domains"]["automated_strategy_authorization"]
+
+        self.assertIn(
+            "resolve uncertain automated usage or re-enable automatic trading",
+            task_map,
+        )
+        self.assertIn("dispatch automated authorization notifications", task_map)
+        self.assertIn("scripts/weex_auto_trade_notify.py", domain["entrypoints"])
+        self.assertIn(
+            "WEEX_AUTO_TRADE_NOTIFICATION_MODE",
+            manifest["state"]["env_vars"],
+        )
+        operations = SCRIPT_OPERATIONS_REFERENCE.read_text(encoding="utf-8")
+        for field in (
+            "snapshot_id",
+            "created_at",
+            "relative_path",
+            "database_schema_version",
+            "size_bytes",
+            "sha256",
+        ):
+            self.assertIn(f"`{field}`", operations)
+
     def test_contract_definitions_include_futures_demo_endpoints(self) -> None:
         definitions = json.loads((ROOT / "references" / "contract-api-definitions.json").read_text(encoding="utf-8"))
         by_key = {definition["key"]: definition for definition in definitions["definitions"]}
@@ -992,6 +1056,8 @@ class RepoConsistencyTests(unittest.TestCase):
                 "scripts/weex_order_intent_state.py",
                 "scripts/weex_trade_risk_review.py",
                 "scripts/weex_api_credentials.py",
+                "scripts/weex_auto_trade_amount.py",
+                "scripts/weex_auto_trade_state.py",
             ],
         )
 

@@ -1,11 +1,9 @@
-# WEEX Agent Repo Guidance
+# WEEX Trading Competition Project Guidance
 
-- Treat `skills/` as the only source-of-truth layer.
-- Use `skills/weex-trader-skill` for WEEX REST access, profile management, vault operations, and any live order action.
-- Use `skills/weex-analysis-skill` for read-only exposure, PnL, fill, and risk review.
-- Use `skills/weex-monitor-skill` for WEEX automated monitor requests that create, confirm, evaluate, run, list, or cancel local PnL monitor tasks while delegating live execution to trader.
-- Use `skills/weex-partner-skill` for WEEX Partner referral, commission, direct-user asset/trade, sub-agent, and referral relationship queries while delegating REST/profile/Vault work to trader.
-- Use official WEEX conditional orders through `skills/weex-trader-skill` for price-threshold close requests; do not create local price monitor tasks in `weex-monitor-skill`.
-- Never send mutating requests without explicit user confirmation and the live-confirmation flag required by the trader skill.
-- Prefer non-argv secret transport when the trader skill offers a safer option.
-- When analysis needs live data, collect it first, normalize it into JSON, then pass it into the analysis skill.
+- `skills/weex-trader-skill/` is the only source-of-truth implementation layer.
+- This project is OpenClaw-only and ships one skill link: `weex-trader-skill`.
+- Keep the complete Trader safety flow, saved-profile/Vault boundary, official Spot/Futures API definitions, preview/confirm binding, and automated-strategy authorization facade.
+- Never send mutating requests without the required confirmation flag (`--confirm-live` or official futures demo `--trading-mode demo --confirm-demo`).
+- Use official WEEX conditional orders for price-threshold closes; do not add a local monitor task.
+- Do not add Analysis, Monitor, Partner, replay, profile-analysis, deep-risk, or non-OpenClaw host support to this project.
+- Prefer non-argv secret transport and never print credentials, vault passwords, or raw signed headers.

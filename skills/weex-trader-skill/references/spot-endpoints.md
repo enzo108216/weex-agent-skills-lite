@@ -1,28 +1,12 @@
-# WEEX Spot Endpoints (Compact)
+# WEEX Spot Endpoints (Competition)
 
-Primary local definitions:
-- `references/spot-api-definitions.json`
-- `references/spot-api-definitions.md`
+Use `references/spot-api-definitions.json` and `references/spot-api-definitions.md` as the endpoint source. The competition runtime exposes only `spot.account.*`, `spot.config.*`, `spot.market.*`, `spot.order.*`, and `spot.tax.*` entries; `weex_spot_api.py` rejects the Partner rebate category.
 
-Docs roots:
-- https://www.weex.com/api-doc/spot/introduction/APIBriefIntroduction
-- https://www.weex.com/api-doc/spot/changelog
-
-Base URL:
-- `https://api-spot.weex.com`
-
-Catalog groups include:
-- `spot.account.*`, `spot.config.*`, `spot.market.*`, and `spot.order.*`
-- `spot.tax.*` from the current spot tax pages
-- `spot.rebate.*` from the current Partner rebate pages for documentation drift coverage only; `weex_spot_api.py` excludes this group, and the seven supported read-only queries must use the Partner executor
-
-Quick commands:
+Base URL: `https://api-spot.weex.com`.
 
 ```bash
 python3 scripts/weex_spot_api.py list-endpoints --pretty
 python3 scripts/weex_spot_api.py call --endpoint spot.market.get_ticker_info --query '{"symbol":"BTCUSDT"}' --pretty
 ```
 
-Latest trade endpoint:
-- `POST /api/v3/order`
-- https://www.weex.com/api-doc/spot/orderApi/PlaceOrder
+All mutating Spot calls require the formal Trader preview/confirmation flow and `--confirm-live`.

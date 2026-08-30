@@ -1,22 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly DEFAULT_REPO_URL="https://github.com/weex-labs/weex-agent-skills"
+readonly DEFAULT_REPO_URL="https://github.com/weex-labs/weex-agent-skills-competition"
 readonly DEFAULT_BRANCH="main"
-readonly APPROVED_COMMIT="e10c2089550159afb7247271d1041d9b415145cd"
+readonly APPROVED_COMMIT="${WEEX_OPENCLAW_APPROVED_COMMIT:-}"
 readonly OPENCLAW_ROOT="${OPENCLAW_HOME:-${HOME}/.openclaw}"
-readonly REPO_DIR="${WEEX_OPENCLAW_REPO_DIR:-${OPENCLAW_ROOT}/skill-repos/weex-agent-skills}"
+readonly REPO_DIR="${WEEX_OPENCLAW_REPO_DIR:-${OPENCLAW_ROOT}/skill-repos/weex-agent-skills-competition}"
 readonly SKILLS_DIR="${WEEX_OPENCLAW_SKILLS_DIR:-${OPENCLAW_ROOT}/skills}"
-readonly BIN_LINK="${WEEX_OPENCLAW_BIN_LINK:-${HOME}/bin/update-weex-openclaw-skills.sh}"
+readonly BIN_LINK="${WEEX_OPENCLAW_BIN_LINK:-${HOME}/bin/update-weex-openclaw-skills-competition.sh}"
 readonly SCRIPT_RELATIVE_PATH="skills/weex-trader-skill/scripts/update_openclaw_skills.sh"
-readonly STABLE_UPDATER="${OPENCLAW_ROOT}/update-weex-openclaw-skills.sh"
+readonly STABLE_UPDATER="${OPENCLAW_ROOT}/update-weex-openclaw-skills-competition.sh"
 
-readonly -a WEEX_SKILLS=(
-  "weex-trader-skill"
-  "weex-analysis-skill"
-  "weex-monitor-skill"
-  "weex-partner-skill"
-)
+readonly -a WEEX_SKILLS=("weex-trader-skill")
 
 DEV_MODE=0
 for argument in "$@"; do
@@ -39,6 +34,7 @@ if (( DEV_MODE == 0 )); then
   fi
   REPO_URL="${DEFAULT_REPO_URL}"
   BRANCH="${DEFAULT_BRANCH}"
+  [[ -n "${APPROVED_COMMIT}" ]] || { printf 'Error: production updates require WEEX_OPENCLAW_APPROVED_COMMIT to pin a released competition commit\n' >&2; exit 1; }
 else
   REPO_URL="${WEEX_OPENCLAW_REPO_URL:-${DEFAULT_REPO_URL}}"
   BRANCH="${WEEX_OPENCLAW_BRANCH:-${DEFAULT_BRANCH}}"
@@ -92,8 +88,7 @@ validate_checkout() {
     [[ -f "${skill_path}/SKILL.md" && ! -L "${skill_path}/SKILL.md" ]] \
       || fail "invalid skill checkout; missing regular SKILL.md: ${skill_name}"
   done
-  if git -C "${checkout}" ls-files -s -- \
-      skills/weex-trader-skill skills/weex-analysis-skill skills/weex-monitor-skill skills/weex-partner-skill \
+  if git -C "${checkout}" ls-files -s -- skills/weex-trader-skill \
       | awk '$1 ~ /^160000$/ { found=1 } END { exit found ? 0 : 1 }'; then
     fail "submodules are not permitted in the OpenClaw skill checkout"
   fi

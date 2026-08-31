@@ -6,6 +6,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -19,12 +21,49 @@ INTENT_FILENAME = "order-intent.json"
 
 def intent_path() -> Path:
     path = config_dir()
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
     return path / INTENT_FILENAME
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary_path.chmod(0o600)
+        os.replace(temporary_path, path)
+        temporary_path = None
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+        except OSError:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
 
 
 def build_risk_signature(
@@ -42,8 +81,16 @@ def build_risk_signature(
     created_at: int | None = None,
     expires_at: int | None = None,
     ttl_seconds: int | None = None,
+    confirmation_reply_text: str | None = None,
+    confirmation_language: str | None = None,
+    freshness_required: bool | None = None,
 ) -> str:
     alerts = analysis_output.get("alerts", []) if isinstance(analysis_output, dict) else None
+    fact_binding = (
+        analysis_output.get("fact_binding")
+        if isinstance(analysis_output, dict)
+        else None
+    )
     serialized = json.dumps(
         {
             "intent_id": intent_id,
@@ -55,10 +102,14 @@ def build_risk_signature(
             "created_at": created_at,
             "expires_at": expires_at,
             "ttl_seconds": ttl_seconds,
+            "confirmation_reply_text": confirmation_reply_text,
+            "confirmation_language": confirmation_language,
+            "freshness_required": freshness_required,
             "order_preview": order_preview,
             "raw_order": raw_order,
             "tp_sl_order": tp_sl_order,
             "alerts": alerts,
+            "fact_binding": fact_binding,
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -89,6 +140,9 @@ def intent_signature_is_valid(
         created_at=payload.get("created_at"),
         expires_at=payload.get("expires_at"),
         ttl_seconds=payload.get("ttl_seconds"),
+        confirmation_reply_text=payload.get("confirmation_reply_text"),
+        confirmation_language=payload.get("confirmation_language"),
+        freshness_required=payload.get("freshness_required"),
     )
     if not hmac.compare_digest(stored_signature, recomputed_signature):
         return False
@@ -110,6 +164,9 @@ def build_intent(
     ttl_seconds: int = 300,
     intent_type: str = "order",
     tp_sl_order: dict[str, Any] | None = None,
+    confirmation_reply_text: str | None = None,
+    confirmation_language: str | None = None,
+    freshness_required: bool | None = None,
 ) -> dict[str, Any]:
     current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
     expires_at = current_ms + (ttl_seconds * 1000)
@@ -126,6 +183,9 @@ def build_intent(
         "order_preview": order_preview,
         "raw_order": raw_order,
         "analysis_output": analysis_output,
+        "confirmation_reply_text": confirmation_reply_text,
+        "confirmation_language": confirmation_language,
+        "freshness_required": freshness_required,
     }
     if environment is not None:
         payload["environment"] = environment
@@ -145,6 +205,9 @@ def build_intent(
         created_at=current_ms,
         expires_at=expires_at,
         ttl_seconds=ttl_seconds,
+        confirmation_reply_text=confirmation_reply_text,
+        confirmation_language=confirmation_language,
+        freshness_required=freshness_required,
     )
     return payload
 

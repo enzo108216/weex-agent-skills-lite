@@ -7,7 +7,6 @@ import argparse
 import getpass
 import json
 import os
-import platform
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -22,13 +21,9 @@ setup_linux_vault = None
 unlock_linux_vault = None
 vault_status = None
 
-WINDOWS_MACOS_BARE_UI_COMMANDS = frozenset({"setup", "unlock"})
-
-
 TEXTS = {
     "en": {
-        "parser_description": "Manage the WEEX application vault across Windows, macOS, and Linux. On Windows/macOS, bare setup and unlock commands open the vault UI unless --cli is used.",
-        "cli_help": "Force terminal mode on Windows/macOS when bare setup or unlock would otherwise open the vault UI",
+        "parser_description": "Manage the WEEX application vault from the portable CLI.",
         "pretty_help": "Pretty-print JSON output for easier reading",
         "setup_help": "Create the encrypted vault",
         "setup_description": "Initialize the encrypted vault in manual_once mode.",
@@ -65,8 +60,7 @@ TEXTS = {
         "runtime_unavailable": "Unable to start the WEEX vault CLI because its runtime dependencies are unavailable.",
     },
     "zh": {
-        "parser_description": "管理 WEEX 应用保险库，可在 Windows、macOS 和 Linux 上使用。在 Windows/macOS 上，未附加其他 CLI 参数的 setup 和 unlock 默认会打开 Vault UI，除非使用 --cli。",
-        "cli_help": "在 Windows/macOS 上强制使用终端模式，而不是让无附加参数的 setup 或 unlock 默认打开 Vault UI",
+        "parser_description": "通过可移植命令行管理 WEEX 应用保险库。",
         "pretty_help": "以更易读的格式输出 JSON",
         "setup_help": "创建加密保险库",
         "setup_description": "初始化加密保险库并选择解锁模式。",
@@ -273,7 +267,6 @@ def build_parser(language: str) -> argparse.ArgumentParser:
         description=t(language, "parser_description"),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--cli", action="store_true", help=t(language, "cli_help"))
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_setup = sub.add_parser(
@@ -339,38 +332,9 @@ def build_parser(language: str) -> argparse.ArgumentParser:
     return parser
 
 
-def launch_vault_ui(language: str, *, requested_action: Optional[str]) -> int:
-    from weex_vault_manager_app import main as vault_ui_main
-
-    return vault_ui_main(language=language, requested_action=requested_action, argv=[])
-
-
-def _resolve_platform_vault_ui_request(raw_args: list[str]) -> tuple[bool, Optional[str]]:
-    if platform.system() not in {"Windows", "Darwin"}:
-        return False, None
-    if "--cli" in raw_args or "-h" in raw_args or "--help" in raw_args:
-        return False, None
-    if not raw_args:
-        return True, None
-    if raw_args[0] in WINDOWS_MACOS_BARE_UI_COMMANDS and len(raw_args) == 1:
-        return True, raw_args[0]
-    return False, None
-
-
 def main(language: str | None = None, argv: Optional[list[str]] = None) -> int:
     resolved_language = resolve_language(language)
     raw_args = list(argv if argv is not None else os.sys.argv[1:])
-    use_ui, requested_action = _resolve_platform_vault_ui_request(raw_args)
-    if use_ui:
-        try:
-            refresh_agent_records(
-                preferred_language=resolved_language,
-                command=f"vault.ui.{requested_action or 'launch'}",
-            )
-        except Exception:
-            pass
-        return launch_vault_ui(resolved_language, requested_action=requested_action)
-
     args = build_parser(resolved_language).parse_args(raw_args)
     command_name = f"vault.{args.command}"
     try:

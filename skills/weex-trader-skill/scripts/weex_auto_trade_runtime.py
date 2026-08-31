@@ -184,7 +184,7 @@ class OfficialAutoTradeRuntime:
         order = _required_mapping(leg.get("order"), "order")
         leg_type = str(leg.get("leg_type") or "")
         if leg_type in {"TAKE_PROFIT", "STOP_LOSS"}:
-            payload = self.risk_aggregator.collect_account_risk_payload(
+            payload = self.risk_aggregator.collect_account_facts_payload(
                 profile_name=self.profile_name,
                 market="futures",
                 trading_mode="live",

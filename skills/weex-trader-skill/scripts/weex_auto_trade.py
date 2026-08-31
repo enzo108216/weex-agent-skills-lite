@@ -322,7 +322,10 @@ class AutoTradeFacade:
             "max_total_amount_u": request["scope"]["max_total_amount"],
             "valid_hours": request["scope"]["valid_hours"],
             "request_expires_at": request["request_expires_at"],
-            "orders_skip_per_order_confirmation": request_status in {"PENDING", "GRANTED"},
+            # A pending request grants no trading authority.  The field is
+            # intentionally false until the request is actually granted and
+            # the resulting authorization is ACTIVE.
+            "orders_skip_per_order_confirmation": False,
             "revoke_command": "weex_auto_trade.py revoke-authorization --input -",
             "trust_boundary": (
                 "Local same-OS-user misuse guard; not identity authentication and not protection "
@@ -468,6 +471,8 @@ class AutoTradeFacade:
             runtime = runtime_factory(profile)
         except FacadeError:
             raise
+        except SystemExit:
+            runtime = None
         except Exception:
             runtime = None
         if runtime is None:
@@ -499,6 +504,24 @@ class AutoTradeFacade:
                     submitter=runtime.submitter,
                     confirm_live=confirm_live,
                 )
+            except SystemExit:
+                # Profile/Vault setup failures are read-time runtime
+                # unavailability, not evidence that a write was attempted.
+                # Keep the facade's JSON contract stable and route to the
+                # normal manual-confirmation fallback.
+                result = {
+                    "ok": False,
+                    "status": "MANUAL_CONFIRMATION_REQUIRED",
+                    "error": {"code": "RUNTIME_UNAVAILABLE"},
+                    "advisory_alerts": [],
+                    "blocking_reasons": [
+                        {
+                            "code": "RUNTIME_UNAVAILABLE",
+                            "message": "official automated-trading runtime is unavailable",
+                        }
+                    ],
+                    "next_action": "PREVIEW_AND_CONFIRM_ORDER_MANUALLY",
+                }
             except Exception:
                 try:
                     self.state.record_submission_state_uncertain(
@@ -571,7 +594,7 @@ class AutoTradeFacade:
                     "",
                     "请核对 order_preview 中的完整订单。",
                     "",
-                    "确认后回复：确认，我直接下单。",
+                    "确认后回复：确认",
                 ]
                 if is_authorization_miss:
                     confirmation_lines.extend(["", authorization_hint])
@@ -862,6 +885,9 @@ def _build_manual_fallback_intent(
         raw_order=dict(orders[0]),
         analysis_output=analysis_output,
         now_ms=int(time.time() * 1000),
+        confirmation_reply_text="确认",
+        confirmation_language="zh",
+        freshness_required=False,
     )
     intent.update(
         {
@@ -889,11 +915,18 @@ def _public_auto_result(
     strategy_id: str,
     authorization_id: str,
 ) -> dict[str, Any]:
+    # Risk/advisory details are internal authorization guards.  They remain
+    # in the local audit event payload, but are never surfaced through the
+    # conversational facade (Lite keeps confirmation-only user messaging).
+    public_result = dict(result)
+    public_result.pop("advisory_alerts", None)
     public_legs = []
     for leg in result.get("legs") or []:
         if not isinstance(leg, dict):
             continue
         public_leg = _public_usage_amounts(leg)
+        for internal_key in ("advisory_alerts", "risk_rule_version", "risk_input_timestamp"):
+            public_leg.pop(internal_key, None)
         public_legs.append(
             {
                 **public_leg,
@@ -902,7 +935,7 @@ def _public_auto_result(
             }
         )
     return {
-        **result,
+        **public_result,
         "profile": profile_name,
         "strategy_id": _mask_identifier(strategy_id),
         "authorization_id": _mask_identifier(authorization_id),

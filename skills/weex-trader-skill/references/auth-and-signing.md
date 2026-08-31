@@ -21,19 +21,18 @@ Signature:
 Supported credential sources for direct contract/spot REST:
 - container/runtime environment: `WEEX_API_KEY`, `WEEX_API_SECRET`, and `WEEX_API_PASSPHRASE`
 - profile metadata in `~/.weex-trader-skill/profiles.meta.json` with secrets in the Application Vault
-  - Windows/macOS: application vault with UI-first unlock/setup flows
-  - Linux: application vault with terminal/manual_once flows
+  - Windows/macOS/Linux: application vault with portable CLI `manual_once` setup/unlock flows
 
 Credential precedence:
 - an explicit `--profile` uses that saved profile
 - without `--profile`, a complete fixed environment set is used before the configured default profile
 - the three fixed environment variables must be provided together; a partial set fails closed
 - direct contract/spot private calls can therefore run without a saved profile
-- Partner, aggregation, trade-guard, and profile-management flows still use saved profiles
+- Automated authorization and profile-management flows require saved profiles; trade-guard may use an explicit saved profile or a complete runtime credential set
 
 Optional environment overrides still supported:
 - `WEEX_TRADER_SKILL_HOME`: override the runtime state directory for profiles, vault files, and agent cache
-- `WEEX_API_TIMEOUT`: override HTTP timeout in seconds for API calls. Partner REST defaults to 30 seconds; contract and spot keep their existing defaults. A timeout never authorizes an automatic retry.
+- `WEEX_API_TIMEOUT`: override HTTP timeout in seconds for API calls. Contract and spot keep their existing defaults. A timeout never authorizes an automatic retry.
 - `WEEX_CONTRACT_API_BASE` / `WEEX_SPOT_API_BASE`: select product-specific contract/spot hosts; use these for staging because the two products have different hosts
 - `WEEX_API_BASE`: shared fallback base URL when a product-specific base is not set
 - `WEEX_LOCALE`: override the locale header for direct contract/spot calls

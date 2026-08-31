@@ -2829,7 +2829,7 @@ class AutoTradeCliTests(unittest.TestCase):
                 "max_order_count",
             ):
                 self.assertNotIn(removed_field, confirmation)
-            self.assertTrue(confirmation["orders_skip_per_order_confirmation"])
+            self.assertFalse(confirmation["orders_skip_per_order_confirmation"])
             self.assertIn("not identity authentication", confirmation["trust_boundary"])
             self.assertIn("revoke-authorization", confirmation["revoke_command"])
 
@@ -2846,6 +2846,17 @@ class AutoTradeCliTests(unittest.TestCase):
             )
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertEqual(granted["status"], "ACTIVE")
+            process, active_shown = self._run_cli(
+                home,
+                "show-authorization-request",
+                {
+                    "profile": "strategy-live",
+                    "strategy_id": registered["strategy_id"],
+                    "request_id": pending["request_id"],
+                },
+            )
+            self.assertEqual(process.returncode, 0, process.stderr)
+            self.assertTrue(active_shown["confirmation"]["orders_skip_per_order_confirmation"])
 
             process, event_list = self._run_cli(
                 home,
@@ -3014,8 +3025,12 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                         "accepted_amount_u": "40",
                         "reserved_amount_u": "0",
                         "remaining_amount_u": "10",
+                        "advisory_alerts": [{"type": "internal"}],
+                        "risk_rule_version": "fixture-v1",
+                        "risk_input_timestamp": "now",
                     }
                 ],
+                "advisory_alerts": [{"type": "internal"}],
             },
             profile_name="profile",
             strategy_id="strat_1234567890",
@@ -3034,6 +3049,10 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
         self.assertNotIn("accepted_amount_u", leg)
         self.assertNotIn("reserved_amount_u", leg)
         self.assertNotIn("remaining_amount_u", leg)
+        self.assertNotIn("advisory_alerts", public)
+        self.assertNotIn("advisory_alerts", leg)
+        self.assertNotIn("risk_rule_version", leg)
+        self.assertNotIn("risk_input_timestamp", leg)
 
         event = cli_module._public_event(
             {

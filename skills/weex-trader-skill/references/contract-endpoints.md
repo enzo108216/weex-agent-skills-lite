@@ -34,3 +34,5 @@ Then call any endpoint by key:
 ```bash
 python3 scripts/weex_contract_api.py call --endpoint <key> --query '{}' --body '{}' --pretty
 ```
+
+Conversational mutations must use `weex_trade_guard.py` preview/confirm (including `--user-reply`); this low-level command is for explicit operator/API use only.

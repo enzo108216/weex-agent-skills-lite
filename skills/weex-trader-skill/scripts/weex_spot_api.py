@@ -38,13 +38,14 @@ resolve_profile = None
 DEFAULT_BASE_URL = "https://api-spot.weex.com"
 DEFAULT_LOCALE = "en-US"
 DEFAULT_TIMEOUT = 15.0
+TRADING_MODES = ("live", "demo")
 GET_BODY_UNSUPPORTED_MESSAGE = (
     "GET requests do not accept --body. Pass request fields with --query instead."
 )
 PRIVATE_PROFILE_REQUIRED_MESSAGE = (
     "Private commands require WEEX_API_KEY, WEEX_API_SECRET, and WEEX_API_PASSPHRASE "
     "or a saved profile. Configure the environment variables, configure a default profile "
-    "with scripts/weex_profile_manager.py or scripts/weex_profiles.py, or pass --profile <name>."
+    "with scripts/weex_profiles.py, or pass --profile <name>."
 )
 PROFILE_RUNTIME_DEPENDENCY_MISSING = (
     "Unable to enable saved-profile support for the WEEX Spot REST API helper "
@@ -70,6 +71,8 @@ class Endpoint:
     request_transport: str = "query"
     query_fields: tuple[str, ...] = ()
     body_fields: tuple[str, ...] = ()
+    required_query_fields: tuple[str, ...] = ()
+    required_body_fields: tuple[str, ...] = ()
 
 
 def load_endpoint_map() -> Dict[str, Endpoint]:
@@ -77,8 +80,6 @@ def load_endpoint_map() -> Dict[str, Endpoint]:
     obj = json.loads(refs.read_text(encoding="utf-8"))
     endpoint_map: Dict[str, Endpoint] = {}
     for d in obj.get("definitions", []):
-        if d.get("category") == "rebate":
-            continue
         ep = Endpoint(
             key=d["key"],
             category=d.get("category", ""),
@@ -91,6 +92,20 @@ def load_endpoint_map() -> Dict[str, Endpoint]:
             request_transport=str(d.get("request_transport", "query")),
             query_fields=tuple(str(value) for value in d.get("query_fields", [])),
             body_fields=tuple(str(value) for value in d.get("body_fields", [])),
+            required_query_fields=tuple(
+                str(item["name"])
+                for item in d.get("request_params", [])
+                if isinstance(item, dict)
+                and item.get("name") in d.get("query_fields", [])
+                and str(item.get("required", "")).strip().lower() in {"yes", "required"}
+            ),
+            required_body_fields=tuple(
+                str(item["name"])
+                for item in d.get("request_params", [])
+                if isinstance(item, dict)
+                and item.get("name") in d.get("body_fields", [])
+                and str(item.get("required", "")).strip().lower() in {"yes", "required"}
+            ),
         )
         endpoint_map[ep.key] = ep
     return endpoint_map
@@ -156,6 +171,18 @@ def compact_json(value: Optional[Dict[str, Any]]) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
+def _business_error(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("success") is False:
+        return True
+    error_code = payload.get("errorCode")
+    if error_code not in (None, "", 0, "0", "00000"):
+        return True
+    code = payload.get("code")
+    return code not in (None, "", 0, "0", "00000", "SUCCESS")
+
+
 class WeexSpotClient:
     def __init__(
         self,
@@ -201,8 +228,7 @@ class WeexSpotClient:
             if self.profile_name:
                 raise SystemExit(
                     f"Missing private API credentials in profile '{self.profile_name}'. "
-                    "Update the saved profile with scripts/weex_profile_manager.py "
-                    "or scripts/weex_profiles.py and retry: "
+                    "Update the saved profile with scripts/weex_profiles.py and retry: "
                     + ", ".join(missing)
                 )
             raise SystemExit(PRIVATE_PROFILE_REQUIRED_MESSAGE)
@@ -228,6 +254,7 @@ class WeexSpotClient:
         method = endpoint.method.upper()
         q = query or {}
         b = body or {}
+        self._validate_payload_fields(endpoint, q, b)
         if method == "GET" and b:
             raise SystemExit(GET_BODY_UNSUPPORTED_MESSAGE)
         if endpoint.request_transport == "query" and b:
@@ -277,6 +304,36 @@ class WeexSpotClient:
             "body": b,
         }
 
+    @staticmethod
+    def _validate_payload_fields(
+        endpoint: Endpoint,
+        query: Dict[str, Any],
+        body: Dict[str, Any],
+    ) -> None:
+        unknown_query = sorted(set(query) - set(endpoint.query_fields))
+        unknown_body = sorted(set(body) - set(endpoint.body_fields))
+        if unknown_query:
+            raise SystemExit(
+                f"unknown query fields for {endpoint.key}: {', '.join(unknown_query)}"
+            )
+        if unknown_body:
+            raise SystemExit(
+                f"unknown body fields for {endpoint.key}: {', '.join(unknown_body)}"
+            )
+        missing_query = [
+            field
+            for field in endpoint.required_query_fields
+            if query.get(field) in (None, "")
+        ]
+        missing_body = [
+            field
+            for field in endpoint.required_body_fields
+            if body.get(field) in (None, "")
+        ]
+        if missing_query or missing_body:
+            missing = ", ".join([*missing_query, *missing_body])
+            raise SystemExit(f"missing required request fields for {endpoint.key}: {missing}")
+
     def send(self, prepared: Dict[str, Any]) -> Dict[str, Any]:
         req = request.Request(
             url=prepared["url"],
@@ -291,6 +348,8 @@ class WeexSpotClient:
                     payload = json.loads(raw)
                 except json.JSONDecodeError:
                     payload = {"raw": raw}
+                if _business_error(payload):
+                    return {"ok": False, "status": resp.status, "error": payload}
                 return {"ok": True, "status": resp.status, "data": payload}
         except error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
@@ -332,6 +391,19 @@ def private_environment() -> Dict[str, Any]:
     }
 
 
+def normalize_trading_mode(raw: Optional[str], *, required: bool = False) -> str:
+    if raw in (None, ""):
+        if required:
+            raise SystemExit("trading_mode_required: choose live for private spot operations")
+        return "live"
+    mode = str(raw).strip().lower()
+    if mode not in TRADING_MODES:
+        raise SystemExit(f"invalid_trading_mode: expected one of {', '.join(TRADING_MODES)}")
+    if mode == "demo":
+        raise SystemExit("demo_spot_unsupported: spot demo trading is not supported by WEEX")
+    return mode
+
+
 def user_environment_prefix(environment: Dict[str, Any], language: Optional[str] = None) -> str:
     resolved_language = resolve_language(language)
     if resolved_language == "zh":
@@ -367,8 +439,33 @@ def execute_endpoint(
     dry_run: bool,
     confirm_live: bool,
     pretty: bool,
+    trading_mode: Optional[str] = None,
 ) -> int:
+    code, payload = execute_endpoint_payload(
+        client=client,
+        endpoint_key=endpoint_key,
+        query=query,
+        body=body,
+        dry_run=dry_run,
+        confirm_live=confirm_live,
+        trading_mode=trading_mode,
+    )
+    output_json(payload, pretty)
+    return code
+
+
+def execute_endpoint_payload(
+    *,
+    client: WeexSpotClient,
+    endpoint_key: str,
+    query: Dict[str, Any],
+    body: Dict[str, Any],
+    dry_run: bool,
+    confirm_live: bool,
+    trading_mode: Optional[str] = None,
+) -> tuple[int, Dict[str, Any]]:
     endpoint = ENDPOINTS[endpoint_key]
+    normalize_trading_mode(trading_mode, required=endpoint.requires_auth)
     validate_endpoint_constraints(endpoint, query, body)
     environment = private_environment() if endpoint.requires_auth else None
 
@@ -392,8 +489,7 @@ def execute_endpoint(
         }
         if environment is not None:
             add_environment_context(preview, environment)
-        output_json(preview, pretty)
-        return 0
+        return 0, preview
 
     resp = client.send(prepared)
     payload = {
@@ -406,8 +502,7 @@ def execute_endpoint(
     }
     if environment is not None:
         add_environment_context(payload, environment)
-    output_json(payload, pretty)
-    return 0 if resp.get("ok") else 1
+    return (0 if resp.get("ok") else 1), payload
 
 
 def normalize_spot_symbol(symbol: str) -> str:
@@ -489,6 +584,7 @@ def cmd_call(args: argparse.Namespace, client: WeexSpotClient) -> int:
         dry_run=args.dry_run,
         confirm_live=args.confirm_live,
         pretty=args.pretty,
+        trading_mode=getattr(args, "trading_mode", None),
     )
 
 
@@ -501,6 +597,7 @@ def cmd_ticker(args: argparse.Namespace, client: WeexSpotClient) -> int:
         dry_run=False,
         confirm_live=False,
         pretty=args.pretty,
+        trading_mode=None,
     )
 
 
@@ -535,6 +632,7 @@ def cmd_place_order(args: argparse.Namespace, client: WeexSpotClient) -> int:
         dry_run=args.dry_run,
         confirm_live=args.confirm_live,
         pretty=args.pretty,
+        trading_mode=args.trading_mode,
     )
 
 
@@ -589,6 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_call.add_argument("--body", default="{}", help="JSON object string")
     p_call.add_argument("--dry-run", action="store_true", help="Preview the signed request without sending it")
     p_call.add_argument("--confirm-live", action="store_true", help="Allow live mutating requests")
+    p_call.add_argument("--trading-mode", choices=TRADING_MODES, default=None, help="Explicit spot trading mode; only live is supported")
     p_call.add_argument("--pretty", action="store_true", help="Pretty-print JSON output for easier reading")
 
     p_ticker = sub.add_parser(
@@ -615,6 +714,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_place.add_argument("--new-client-order-id", default=None, help="Optional client-defined order identifier; auto-generated when omitted")
     p_place.add_argument("--dry-run", action="store_true", help="Build and sign the request without sending it")
     p_place.add_argument("--confirm-live", action="store_true", help="Required to actually send the order instead of refusing live mutation")
+    p_place.add_argument("--trading-mode", choices=TRADING_MODES, default=None, help="Explicit spot trading mode; only live is supported")
     p_place.add_argument("--pretty", action="store_true", help="Pretty-print JSON output for easier reading")
 
     return parser

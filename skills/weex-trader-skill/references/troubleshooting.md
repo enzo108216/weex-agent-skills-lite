@@ -37,29 +37,18 @@ Action:
 - rerun `scripts/weex_agent_state.py --command skill.preflight --pretty`
 - retry the same private command after `runtime.env_validation.ok` becomes `true`
 
-### Windows Or macOS GUI Crashes Before Opening
+### Desktop GUI References
 
-Symptom:
-
-- the profile manager or vault UI exits immediately
-- macOS shows a `Python quit unexpectedly` dialog
-- the current interpreter can import `tkinter`, but creating a window fails
-- preflight says the system/miniforge Python can launch Tk but the managed GUI runtime is missing
-
-Action:
-
-- ask the AI assistant to install the managed GUI runtime; after confirmation it will run the bootstrap with pinned installer checksum verification and locked dependency hashes:
+This OpenClaw-only checkout does not ship a desktop profile/Vault manager. Profile
+and Vault operations use the portable CLI entrypoints on every platform:
 
 ```bash
-python3 scripts/weex_gui_bootstrap.py probe --pretty
-python3 scripts/weex_gui_bootstrap.py ensure --accept-managed-runtime --pretty
-python3 scripts/weex_doctor.py gui
+python3 scripts/weex_profiles.py list --pretty
+python3 scripts/weex_vault_cli.py status --pretty
 ```
 
-- retry the same GUI entrypoint after `ensure` succeeds; Windows/macOS GUI launch requires the managed runtime even if the system interpreter has Tk
-- if the GUI was launched through `scripts/weex_gui_launcher.py`, inspect the newest file under `~/.weex-trader-skill/gui-launchers/*.log`; detached-launch logs are capped at 256 KiB and old launch records are pruned automatically
-- if `WEEX_GUI_FORCE_FOREGROUND=1` is set, clear it unless you intentionally want the GUI attached to the current shell for debugging
-- if you intentionally do not want the managed runtime, use the terminal profile commands instead of launching the GUI
+`weex_gui_bootstrap.py` and `weex_doctor.py gui` are retained only for runtime
+diagnostics used by preflight; they do not provide a supported trading UI path.
 
 ### Authentication Or Signature Error
 
@@ -143,7 +132,7 @@ Action:
 
 Symptom:
 
-- profile manager says save succeeded
+- profile CLI says save succeeded
 - a later sandboxed check reports `has_credentials: false`
 
 Action:

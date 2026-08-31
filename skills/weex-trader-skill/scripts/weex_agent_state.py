@@ -259,10 +259,14 @@ def _launcher_for_os(os_family: str) -> str:
 
 
 def _route_profile_management(os_family: str, language: str, gui_available: bool, interaction_mode: str) -> str:
+    # The competition package ships only the portable profile CLI.  Keep the
+    # GUI probe in preflight for diagnostics, but never route to a desktop
+    # manager that is not present in this checkout.
+    del gui_available
     if os_family == "Windows":
-        return f"windows_{'gui' if gui_available else 'cli'}_{language}"
+        return f"windows_cli_{language}"
     if os_family == "Darwin":
-        return f"macos_{'gui' if gui_available else 'cli'}_{language}"
+        return f"macos_cli_{language}"
     if os_family == "Linux":
         if interaction_mode == "headless_server":
             return f"linux_cli_{language}"
@@ -271,10 +275,11 @@ def _route_profile_management(os_family: str, language: str, gui_available: bool
 
 
 def _route_vault_management(os_family: str, language: str, gui_available: bool, interaction_mode: str) -> str:
+    del gui_available
     if os_family == "Windows":
-        return f"windows_{'gui' if gui_available else 'cli'}_{language}"
+        return f"windows_cli_{language}"
     if os_family == "Darwin":
-        return f"macos_{'gui' if gui_available else 'cli'}_{language}"
+        return f"macos_cli_{language}"
     if os_family == "Linux":
         if interaction_mode == "headless_server":
             return f"linux_vault_cli_{language}"
@@ -571,7 +576,7 @@ def build_agent_init_state(preferred_language: str | None = None) -> dict[str, A
             "public_api_launcher": _launcher_for_os(os_family),
             "private_api_requires": [
                 "direct_contract_spot:complete_environment_credentials_or_saved_profile",
-                "partner_aggregation_trade_guard:saved_profile",
+                "automated_authorization:saved_profile",
                 "vault_ready_for_saved_profile_paths",
             ],
         },

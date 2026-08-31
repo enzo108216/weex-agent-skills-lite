@@ -42,24 +42,27 @@
     "spot": {
       "entrypoint": "scripts/weex_spot_api.py",
       "definitions": "references/spot-api-definitions.json",
-      "commands": ["list-endpoints", "call", "place-order"]
+      "commands": ["list-endpoints", "call", "ticker", "place-order"]
     },
     "trade_guard": {
       "entrypoint": "scripts/weex_trade_guard.py",
-      "commands": ["preview-order", "preview-tp-sl", "confirm-order", "confirm-tp-sl", "account-scan"]
+      "commands": ["preview-order", "preview-tp-sl", "confirm-order", "confirm-tp-sl", "preview-cancel", "confirm-cancel"]
     },
     "automated_strategy_authorization": {
       "entrypoint": "scripts/weex_auto_trade.py",
       "state": "scripts/weex_auto_trade_state.py",
       "runtime": "scripts/weex_auto_trade_runtime.py",
-      "commands": ["register-strategy", "ensure-authorization", "grant-authorization", "revoke-authorization", "submit-auto", "resolve-auto-usage", "reconcile-auto-order", "event-list", "snapshot-state", "restore-state"],
+      "commands": ["register-strategy", "list-strategies", "retire-strategy", "ensure-authorization", "show-authorization-request", "grant-authorization", "list-authorizations", "revoke-authorization", "submit-auto", "resolve-auto-usage", "enable-auto-trading-after-restore", "reconcile-auto-order", "event-list", "snapshot-state", "restore-state"],
       "trading_mode": "real trading only",
       "profile_policy": "saved profiles only"
     }
   },
   "excluded_capabilities": [
     "analysis",
+    "account risk scan",
+    "deep risk analysis",
     "monitor",
+    "PnL monitor and automatic-close orchestration",
     "partner",
     "replay",
     "profile analysis",

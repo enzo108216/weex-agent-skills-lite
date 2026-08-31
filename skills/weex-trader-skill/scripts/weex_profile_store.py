@@ -902,7 +902,7 @@ def _resolve_profile_from_store(store: Dict[str, Any], name: Optional[str]) -> O
                 return profile
         raise ProfileError(
             f"Profile '{requested}' was not found in {metadata_path()}. "
-            "Open the profile manager or update the metadata file."
+            "Run scripts/weex_profiles.py list/show or update the metadata file."
         )
 
     selected = store.get("default_profile_id")
@@ -912,7 +912,7 @@ def _resolve_profile_from_store(store: Dict[str, Any], name: Optional[str]) -> O
     if raw is None:
         raise ProfileError(
             f"Profile '{selected}' was not found in {metadata_path()}. "
-            "Open the profile manager or update the metadata file."
+            "Run scripts/weex_profiles.py list/show or update the metadata file."
         )
     return _profile_from_raw(selected, raw)
 
@@ -1145,7 +1145,7 @@ def load_profile_credentials(name: str) -> ProfileCredentials:
         missing_str = ", ".join(missing)
         raise ProfileError(
             f"Profile '{profile_label}' is missing secure credentials: {missing_str}. "
-            "Open the profile manager or update the profile with scripts/weex_profiles.py."
+            "Update the profile with scripts/weex_profiles.py."
         )
     return ProfileCredentials(
         api_key=values["api_key"],

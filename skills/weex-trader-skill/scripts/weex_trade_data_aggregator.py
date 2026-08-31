@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize WEEX trading data for replay, profile, and risk analysis."""
+"""Collect and normalize official WEEX facts for guarded trading."""
 
 from __future__ import annotations
 
@@ -18,24 +18,14 @@ DAY_MS = 24 * 60 * 60 * 1000
 HOUR_MS = 60 * 60 * 1000
 RECENT_ORDER_LOOKBACK_MS = HOUR_MS
 RECENT_ORDER_HISTORY_UNAVAILABLE = "recent_order_history_unavailable"
-REPLAY_PERIODS = ("7d", "30d", "90d")
-PROFILE_PERIODS = ("30d", "90d", "180d", "360d")
-COLLECTION_PERIODS = REPLAY_PERIODS + ("180d", "360d")
 MAX_FUTURES_WINDOW_DAYS = 90
-MAX_FUTURES_FILLS_WINDOW_DAYS = 7
-MAX_BILLS_WINDOW_DAYS = 100
-MIN_SPLIT_WINDOW_MS = HOUR_MS
 POSITION_EPSILON = 0.00000001
 FUTURES_ORDER_LIMIT = 1000
-FUTURES_FILL_LIMIT = 100
-FUTURES_BILL_LIMIT = 100
 FUTURES_OPEN_ORDER_LIMIT = 100
 FUTURES_PENDING_LIMIT = 100
 SPOT_ORDER_LIMIT = 200
 SPOT_ORDER_SAFE_LIMIT = 100
 MAX_SPOT_HISTORY_WINDOW_DAYS = 90
-SPOT_FILL_LIMIT = 100
-SPOT_BILL_LIMIT = 100
 KLINE_LIMIT = 100
 DEFAULT_TRADING_MODE = "live"
 TRADING_MODES = ("live", "demo")
@@ -43,26 +33,6 @@ LONG_SIDES = {"long", "buy", "bull"}
 SHORT_SIDES = {"short", "sell", "bear"}
 SPOT_QUOTE_ASSET_FALLBACKS = ("USDT", "USDC", "BTC", "ETH")
 SPOT_CASH_ASSETS = ("USDT", "USDC")
-FUTURES_INCLUDED_BILL_TYPES = {
-    "position_funding",
-    "order_liquidate_fee_income",
-    "start_liquidate",
-    "finish_liquidate",
-    "order_fix_margin_amount",
-}
-FUTURES_EXCLUDED_BILL_TYPES = {
-    "deposit",
-    "withdraw",
-    "transfer_in",
-    "transfer_out",
-    "margin_move_in",
-    "margin_move_out",
-    "position_open_long",
-    "position_open_short",
-    "position_close_long",
-    "position_close_short",
-    "order_fill_fee_income",
-}
 
 
 class AggregationInputError(ValueError):
@@ -91,15 +61,6 @@ def split_time_range(start_ms: int, end_ms: int, *, max_span_days: int) -> list[
         windows.append(TimeWindow(start_ms=cursor, end_ms=next_end))
         cursor = next_end + 1
     return windows
-
-
-def _validate_replay_period(period: str) -> str:
-    normalized = str(period).strip().lower()
-    if normalized not in COLLECTION_PERIODS:
-        raise AggregationInputError(
-            f"Unsupported replay period: {period}. Expected one of {', '.join(COLLECTION_PERIODS)}."
-        )
-    return normalized
 
 
 def _validate_market(market: str) -> str:
@@ -165,10 +126,6 @@ def _normalize_symbol_for_trading_mode(raw: Any, trading_mode: str) -> str:
     return str(raw or "UNKNOWN")
 
 
-def _period_to_days(period: str) -> int:
-    return int(period.removesuffix("d"))
-
-
 def _to_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -232,14 +189,6 @@ def _normalize_position_mode(value: Any) -> str | None:
     if normalized == "HEDGE":
         return "SEPARATED"
     return normalized or None
-
-
-def _extract_meta(payload: Any) -> dict[str, Any]:
-    if isinstance(payload, dict):
-        meta = payload.get("_meta")
-        if isinstance(meta, dict):
-            return meta
-    return {}
 
 
 def _extract_list_payload(payload: Any, *keys: str) -> list[dict[str, Any]]:
@@ -327,84 +276,6 @@ def _should_degrade_spot_kline_error(error: Exception) -> bool:
     )
 
 
-def _should_degrade_spot_bills_error(error: Exception) -> bool:
-    message = str(error).lower()
-    return (
-        "spot.account.get_bill_records" in message
-        and (
-            "too many high-frequency order requests" in message
-            or "'code': -1059" in message
-            or '"code": -1059' in message
-            or "unknown error occurred" in message
-            or "'code': -1000" in message
-            or '"code": -1000' in message
-            or "rate limit exceeded" in message
-            or "'code': 429" in message
-            or '"code": 429' in message
-        )
-    )
-
-
-def _sample_quality(closed_trade_count: int) -> str:
-    if closed_trade_count >= 20:
-        return "full"
-    if closed_trade_count >= 10:
-        return "limited"
-    return "minimal"
-
-
-def _normalize_bill_entry(row: dict[str, Any], *, fallback_market: str) -> dict[str, Any]:
-    market = str(_pick(row, "market") or fallback_market or "").strip().lower() or fallback_market
-    return {
-        "market": market,
-        "symbol": str(_pick(row, "symbol") or ""),
-        "type": str(_pick(row, "type", "incomeType", "bizType") or "unknown").strip().lower(),
-        "amount": _to_float(_pick(row, "amount", "income", "deltaAmount")),
-        "fee": _to_float(_pick(row, "fee", "fillFee", "fees")),
-        "time": _safe_int(_pick(row, "time", "cTime")),
-    }
-
-
-def _classify_bill_adjustment(bill: dict[str, Any]) -> str:
-    market = str(bill.get("market") or "").strip().lower()
-    bill_type = str(bill.get("type") or "").strip().lower()
-    if not bill_type:
-        return "unknown"
-    if market == "spot":
-        return "exclude"
-    if market != "futures":
-        return "unknown"
-    if bill_type in FUTURES_INCLUDED_BILL_TYPES or bill_type.startswith("tracking_"):
-        return "include"
-    if bill_type in FUTURES_EXCLUDED_BILL_TYPES:
-        return "exclude"
-    return "unknown"
-
-
-def _summarize_bill_adjustments(rows: list[dict[str, Any]], *, fallback_market: str) -> dict[str, Any]:
-    adjustment_total = 0.0
-    adjustment_count = 0
-    unclassified_types: set[str] = set()
-
-    for row in rows:
-        bill = _normalize_bill_entry(row, fallback_market=fallback_market)
-        amount = _to_float(bill.get("amount"))
-        if amount in (None, 0.0):
-            continue
-        classification = _classify_bill_adjustment(bill)
-        if classification == "include":
-            adjustment_total += amount or 0.0
-            adjustment_count += 1
-        elif classification == "unknown":
-            unclassified_types.add(str(bill.get("type") or "unknown"))
-
-    return {
-        "bill_adjustment_total": round(adjustment_total, 8),
-        "bill_adjustment_count": adjustment_count,
-        "unclassified_bill_types": sorted(unclassified_types),
-    }
-
-
 def _normalize_trade_position_side(raw_position_side: Any, *, market: str, fallback_side: Any = None) -> str | None:
     side_text = str(raw_position_side or "").strip().lower()
     if side_text in LONG_SIDES:
@@ -420,22 +291,6 @@ def _normalize_trade_position_side(raw_position_side: Any, *, market: str, fallb
     if fallback_text in SHORT_SIDES:
         return "short"
     return None
-
-
-def _trade_count_key(fill: dict[str, Any], order: dict[str, Any], *, market: str) -> tuple[str, str, str, str, str]:
-    account_scope = str(fill.get("account_scope") or order.get("account_scope") or "").strip()
-    if not account_scope and market in {"futures", "spot"}:
-        account_scope = f"personal_{market}"
-    if not account_scope:
-        account_scope = "personal"
-    symbol = str(fill.get("symbol") or order.get("symbol") or "UNKNOWN").upper()
-    position_side = _normalize_trade_position_side(
-        fill.get("position_side") or order.get("position_side"),
-        market=market,
-        fallback_side=fill.get("side") or order.get("side"),
-    ) or "net"
-    position_mode = str(fill.get("position_mode") or order.get("position_mode") or "UNKNOWN")
-    return account_scope, market, symbol, position_side, position_mode
 
 
 def _infer_fill_action(fill: dict[str, Any], order: dict[str, Any], *, market: str) -> str:
@@ -455,15 +310,6 @@ def _infer_fill_action(fill: dict[str, Any], order: dict[str, Any], *, market: s
     if position_side == "short":
         return "entry" if side in SHORT_SIDES else "exit"
     return "entry" if side in LONG_SIDES else "exit"
-
-
-def _safe_int(value: Any) -> int | None:
-    if value in (None, ""):
-        return None
-    try:
-        return int(str(value))
-    except (TypeError, ValueError):
-        return None
 
 
 def _remaining_order_quantity(entry: dict[str, Any]) -> float | None:
@@ -530,92 +376,6 @@ def _matching_working_order_quantity(
             continue
         total += quantity
     return total
-
-
-def _collect_closed_episode_stats(
-    fills: list[dict[str, Any]],
-    orders: list[dict[str, Any]],
-) -> list[dict[str, float | int | None]]:
-    orders_by_id = {
-        str(order.get("order_id") or ""): order
-        for order in orders
-        if str(order.get("order_id") or "")
-    }
-    sorted_fills = sorted(
-        fills,
-        key=lambda item: (int(item.get("time") or 0), str(item.get("order_id") or "")),
-    )
-    active_episodes: dict[tuple[str, str, str, str, str], dict[str, float | int | None]] = {}
-    closed_episodes: list[dict[str, float | int | None]] = []
-
-    for fill in sorted_fills:
-        order = orders_by_id.get(str(fill.get("order_id") or ""), {})
-        market = str(fill.get("market") or order.get("market") or "unknown").strip().lower()
-        key = _trade_count_key(fill, order, market=market)
-        action = _infer_fill_action(fill, order, market=market)
-        quantity = abs(_to_float(fill.get("quantity")) or 0.0)
-        fill_time = _safe_int(fill.get("time"))
-        raw_realized_pnl = _to_float(fill.get("realized_pnl"))
-        raw_fee = _to_float(fill.get("fee"))
-        realized_pnl = raw_realized_pnl or 0.0
-        fee = abs(raw_fee or 0.0)
-        if quantity <= POSITION_EPSILON:
-            continue
-
-        episode = active_episodes.get(key)
-        if action == "entry":
-            if episode is None or (episode.get("open_quantity") or 0.0) <= POSITION_EPSILON:
-                episode = {
-                    "open_time": fill_time,
-                    "open_quantity": 0.0,
-                    "realized_pnl": 0.0,
-                    "fees": 0.0,
-                    "realized_pnl_complete": True,
-                    "fee_complete": True,
-                }
-                active_episodes[key] = episode
-            if raw_fee is None:
-                episode["fee_complete"] = False
-            episode["open_quantity"] = float((episode.get("open_quantity") or 0.0) + quantity)
-            if episode.get("open_time") is None:
-                episode["open_time"] = fill_time
-            episode["realized_pnl"] = float((episode.get("realized_pnl") or 0.0) + realized_pnl)
-            episode["fees"] = float((episode.get("fees") or 0.0) + fee)
-            continue
-
-        if episode is None:
-            continue
-
-        if raw_realized_pnl is None:
-            episode["realized_pnl_complete"] = False
-        if raw_fee is None:
-            episode["fee_complete"] = False
-        episode["realized_pnl"] = float((episode.get("realized_pnl") or 0.0) + realized_pnl)
-        episode["fees"] = float((episode.get("fees") or 0.0) + fee)
-        remaining_quantity = max(0.0, float(episode.get("open_quantity") or 0.0) - quantity)
-        episode["open_quantity"] = remaining_quantity
-        if remaining_quantity <= POSITION_EPSILON:
-            open_time = _safe_int(episode.get("open_time"))
-            hold_ms = None
-            if open_time is not None and fill_time is not None and fill_time >= open_time:
-                hold_ms = fill_time - open_time
-            net_pnl_complete = bool(episode.get("realized_pnl_complete", True)) and bool(episode.get("fee_complete", True))
-            closed_episodes.append(
-                {
-                    "open_time": open_time,
-                    "close_time": fill_time,
-                    "hold_ms": hold_ms,
-                    "net_pnl": (
-                        float((episode.get("realized_pnl") or 0.0) - (episode.get("fees") or 0.0))
-                        if net_pnl_complete
-                        else None
-                    ),
-                    "net_pnl_complete": net_pnl_complete,
-                }
-            )
-            active_episodes.pop(key, None)
-
-    return closed_episodes
 
 
 def _build_order_risk_tp_sl_state(
@@ -687,10 +447,6 @@ def _build_order_risk_tp_sl_state(
         "take_profit_covered_qty": round(take_profit_covered_qty, 8),
         "stop_loss_covered_qty": round(stop_loss_covered_qty, 8),
     }
-
-
-def _profile_sample_trade_count(payload: dict[str, Any]) -> int:
-    return int(payload.get("closed_trade_count") or 0)
 
 
 def _extract_rows(payload: Any, *keys: str) -> list[dict[str, Any]]:
@@ -934,68 +690,6 @@ def _normalize_orders(
     ]
 
 
-def _normalize_fills(
-    payload: Any,
-    market: str,
-    *,
-    trading_mode: str = DEFAULT_TRADING_MODE,
-) -> list[dict[str, Any]]:
-    rows = _extract_rows(payload, "fills", "trades", "items")
-    if not rows and isinstance(payload, list):
-        rows = [item for item in payload if isinstance(item, dict)]
-
-    normalized_rows: list[dict[str, Any]] = []
-    for row in rows:
-        side = str(_pick(row, "side") or "").strip().lower()
-        if not side and market == "spot":
-            is_buyer = _coerce_bool(_pick(row, "isBuyer", "buyer"))
-            if is_buyer is True:
-                side = "buy"
-            elif is_buyer is False:
-                side = "sell"
-        normalized_rows.append(
-            {
-                "account_scope": _normalize_account_scope(market, row, trading_mode=trading_mode),
-                "market": market,
-                "fill_id": str(_pick(row, "id", "tradeId") or ""),
-                "order_id": str(_pick(row, "order_id", "orderId") or ""),
-                "symbol": _normalize_symbol_for_trading_mode(_pick(row, "symbol"), trading_mode),
-                "side": side or "unknown",
-                "position_side": str(_pick(row, "position_side", "positionSide") or "").lower() or None,
-                "margin_type": _normalize_margin_type(_pick(row, "marginType", "margin_type")),
-                "position_mode": _normalize_position_mode(
-                    _pick(row, "positionMode", "position_mode", "separatedMode")
-                ),
-                "price": _to_float(_pick(row, "price")),
-                "quantity": _to_float(_pick(row, "qty", "quantity")),
-                "notional": _to_float(_pick(row, "quoteQty", "quoteQty", "turnover")),
-                "realized_pnl": _to_float(_pick(row, "realizedPnl", "realized_pnl", "pnl")),
-                "fee": _to_float(_pick(row, "commission", "fee", "fees")),
-                "time": int(_pick(row, "time") or 0),
-            }
-        )
-    return normalized_rows
-
-
-def _normalize_bills(payload: Any, market: str) -> list[dict[str, Any]]:
-    rows = _extract_rows(payload, "items", "bills")
-    return [
-        {
-            "account_scope": _normalize_account_scope(market, row),
-            "market": market,
-            "bill_id": str(_pick(row, "billId") or ""),
-            "asset": str(_pick(row, "asset", "coinName") or "UNKNOWN"),
-            "symbol": str(_pick(row, "symbol") or ""),
-            "amount": _to_float(_pick(row, "income", "deltaAmount")),
-            "type": str(_pick(row, "incomeType", "bizType") or "unknown"),
-            "fee": _to_float(_pick(row, "fillFee", "fees")),
-            "balance_after": _to_float(_pick(row, "balance", "afterAmount")),
-            "time": int(_pick(row, "time", "cTime") or 0),
-        }
-        for row in rows
-    ]
-
-
 def _normalize_klines(payload: Any, market: str, symbol: str | None) -> list[dict[str, Any]]:
     if not isinstance(payload, list):
         return []
@@ -1019,6 +713,23 @@ def _normalize_klines(payload: Any, market: str, symbol: str | None) -> list[dic
             }
         )
     return rows
+
+
+def _extract_symbol_product_info(payload: Any, symbol: str) -> dict[str, Any] | None:
+    raw = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+    rows: list[Any]
+    if isinstance(raw, dict) and isinstance(raw.get("symbols"), list):
+        rows = raw["symbols"]
+    elif isinstance(raw, list):
+        rows = raw
+    else:
+        rows = []
+    normalized = str(symbol or "").strip().upper()
+    matches = [
+        row for row in rows
+        if isinstance(row, dict) and str(row.get("symbol") or row.get("instId") or "").strip().upper() == normalized
+    ]
+    return dict(matches[0]) if len(matches) == 1 else None
 
 
 def _safe_current_price_from_klines(
@@ -1353,135 +1064,6 @@ def _pick_primary_futures_symbol(
     return None
 
 
-def _count_closed_trades(fills: list[dict[str, Any]], orders: list[dict[str, Any]]) -> int:
-    orders_by_id = {
-        str(order.get("order_id") or ""): order
-        for order in orders
-        if str(order.get("order_id") or "")
-    }
-    sorted_fills = sorted(
-        fills,
-        key=lambda item: (int(item.get("time") or 0), str(item.get("order_id") or "")),
-    )
-    active_quantities: dict[tuple[str, str, str, str, str], float] = {}
-    exit_only_order_ids: set[str] = set()
-    closed_trade_count = 0
-
-    for fill in sorted_fills:
-        order = orders_by_id.get(str(fill.get("order_id") or ""), {})
-        market = str(fill.get("market") or order.get("market") or "unknown").strip().lower()
-        key = _trade_count_key(fill, order, market=market)
-        action = _infer_fill_action(fill, order, market=market)
-        quantity = abs(_to_float(fill.get("quantity")) or 0.0)
-
-        if action == "entry":
-            active_quantities[key] = active_quantities.get(key, 0.0) + quantity
-            continue
-
-        current_quantity = active_quantities.get(key, 0.0)
-        if current_quantity <= POSITION_EPSILON:
-            order_id = str(fill.get("order_id") or "")
-            fallback_id = f"{key}:{int(fill.get('time') or 0)}"
-            exit_token = order_id or fallback_id
-            if exit_token not in exit_only_order_ids:
-                exit_only_order_ids.add(exit_token)
-                closed_trade_count += 1
-            continue
-
-        remaining_quantity = max(0.0, current_quantity - quantity)
-        if remaining_quantity <= POSITION_EPSILON:
-            active_quantities.pop(key, None)
-            closed_trade_count += 1
-        else:
-            active_quantities[key] = remaining_quantity
-
-    if closed_trade_count:
-        return closed_trade_count
-
-    pnl_based_close_tokens = {
-        str(fill.get("order_id") or f"pnl:{fill.get('symbol')}:{int(fill.get('time') or 0)}")
-        for fill in sorted_fills
-        if abs(_to_float(fill.get("realized_pnl")) or 0.0) > POSITION_EPSILON
-    }
-    if pnl_based_close_tokens:
-        return len(pnl_based_close_tokens)
-
-    filled_orders = sorted(
-        [order for order in orders if str(order.get("status") or "").upper() == "FILLED"],
-        key=lambda item: (int(item.get("time") or item.get("update_time") or 0), str(item.get("order_id") or "")),
-    )
-    if not filled_orders:
-        return 0
-
-    active_quantities = {}
-    exit_only_order_ids = set()
-    order_based_count = 0
-    for order in filled_orders:
-        market = str(order.get("market") or "unknown").strip().lower()
-        key = _trade_count_key(order, order, market=market)
-        action = _infer_fill_action(order, order, market=market)
-        quantity = abs(_to_float(order.get("executed_qty") or order.get("quantity")) or 0.0)
-
-        if action == "entry":
-            active_quantities[key] = active_quantities.get(key, 0.0) + quantity
-            continue
-
-        current_quantity = active_quantities.get(key, 0.0)
-        if current_quantity <= POSITION_EPSILON:
-            order_id = str(order.get("order_id") or "")
-            fallback_id = f"{key}:{int(order.get('time') or order.get('update_time') or 0)}"
-            exit_token = order_id or fallback_id
-            if exit_token not in exit_only_order_ids:
-                exit_only_order_ids.add(exit_token)
-                order_based_count += 1
-            continue
-
-        remaining_quantity = max(0.0, current_quantity - quantity)
-        if remaining_quantity <= POSITION_EPSILON:
-            active_quantities.pop(key, None)
-            order_based_count += 1
-        else:
-            active_quantities[key] = remaining_quantity
-
-    return order_based_count
-
-
-def _has_replay_carry_in(fills: list[dict[str, Any]], orders: list[dict[str, Any]]) -> bool:
-    orders_by_id = {
-        str(order.get("order_id") or ""): order
-        for order in orders
-        if str(order.get("order_id") or "")
-    }
-    sorted_fills = sorted(
-        fills,
-        key=lambda item: (int(item.get("time") or 0), str(item.get("order_id") or "")),
-    )
-    active_quantities: dict[tuple[str, str, str, str, str], float] = {}
-
-    for fill in sorted_fills:
-        order = orders_by_id.get(str(fill.get("order_id") or ""), {})
-        market = str(fill.get("market") or order.get("market") or "unknown").strip().lower()
-        key = _trade_count_key(fill, order, market=market)
-        action = _infer_fill_action(fill, order, market=market)
-        quantity = abs(_to_float(fill.get("quantity")) or 0.0)
-
-        if action == "entry":
-            active_quantities[key] = active_quantities.get(key, 0.0) + quantity
-            continue
-
-        current_quantity = active_quantities.get(key, 0.0)
-        if current_quantity <= POSITION_EPSILON:
-            return True
-
-        remaining_quantity = max(0.0, current_quantity - quantity)
-        if remaining_quantity <= POSITION_EPSILON:
-            active_quantities.pop(key, None)
-        else:
-            active_quantities[key] = remaining_quantity
-
-    return False
-
-
 class TradeDataAggregator:
     def __init__(self, fetcher: Any | None = None) -> None:
         self.fetcher = fetcher or WeexApiFetcher()
@@ -1499,7 +1081,11 @@ class TradeDataAggregator:
                 _merge_degraded_reasons(degraded_reasons, ["spot_balance_unavailable"])
                 return [], True
             raise
-        return _normalize_balance_entries(payload, "spot"), False
+        balances = _normalize_balance_entries(payload, "spot")
+        if not balances:
+            _merge_degraded_reasons(degraded_reasons, ["spot_balance_unavailable"])
+            return [], True
+        return balances, False
 
     def _collect_recent_futures_orders(
         self,
@@ -1565,277 +1151,6 @@ class TradeDataAggregator:
             return [], True
         return _normalize_orders(payload, "spot"), False
 
-    def collect_replay_payload(
-        self,
-        *,
-        profile_name: str,
-        market: str,
-        trading_mode: str = DEFAULT_TRADING_MODE,
-        period: str,
-        symbol: str | None = None,
-        focus: str | None = None,
-    ) -> dict[str, Any]:
-        normalized_market = _validate_market(market)
-        mode = _validate_trading_mode_market(trading_mode, normalized_market)
-        environment = _environment_for_trading_mode(mode, normalized_market)
-        normalized_period = _validate_replay_period(period)
-        normalized_symbol = str(symbol).strip().upper() if symbol else None
-        now_ms = int(time.time() * 1000)
-        end_ms = now_ms
-        start_ms = max(0, end_ms - (_period_to_days(normalized_period) * DAY_MS))
-
-        if normalized_market == "spot" and not normalized_symbol:
-            raise AggregationInputError(
-                "spot replay collection requires a symbol because current spot history endpoints are symbol-specific."
-            )
-        if normalized_market == "all" and not normalized_symbol:
-            constraints = [
-                {
-                    "code": "spot_symbol_required",
-                    "message": "spot history is only collected when symbol is provided.",
-                }
-            ]
-        else:
-            constraints = []
-        partial = normalized_market == "all" and not normalized_symbol
-        degraded_reasons: list[str] = []
-        if partial:
-            _merge_degraded_reasons(degraded_reasons, ["spot_history_skipped_without_symbol"])
-
-        balances: list[dict[str, Any]] = []
-        positions: list[dict[str, Any]] = []
-        orders: list[dict[str, Any]] = []
-        fills: list[dict[str, Any]] = []
-        bills: list[dict[str, Any]] = []
-        price_series: list[dict[str, Any]] = []
-
-        if self.fetcher is not None and normalized_market in {"futures", "all"}:
-            futures_balance_payload = self.fetcher.fetch_futures_balance(
-                profile_name=profile_name,
-                trading_mode=mode,
-            )
-            futures_positions_payload = self.fetcher.fetch_futures_positions(
-                profile_name=profile_name,
-                trading_mode=mode,
-            )
-            futures_orders_payload = self.fetcher.fetch_futures_orders(
-                profile_name=profile_name,
-                trading_mode=mode,
-                start_ms=start_ms,
-                end_ms=end_ms,
-                symbol=normalized_symbol,
-            )
-            balances.extend(_normalize_balance_entries(futures_balance_payload, "futures", trading_mode=mode))
-            positions.extend(_normalize_positions(futures_positions_payload, "futures", trading_mode=mode))
-            orders.extend(_normalize_orders(futures_orders_payload, "futures", trading_mode=mode))
-            futures_meta_sources: list[Any] = [futures_orders_payload]
-            if mode == "demo":
-                partial = True
-                _merge_degraded_reasons(
-                    degraded_reasons,
-                    [
-                        "demo_futures_fills_unavailable",
-                        "demo_futures_bills_unavailable",
-                        "demo_futures_open_orders_unavailable",
-                        "demo_futures_conditional_orders_unavailable",
-                        "demo_futures_tp_sl_state_unavailable",
-                    ],
-                )
-            else:
-                futures_fills_payload = self.fetcher.fetch_futures_fills(
-                    profile_name=profile_name,
-                    start_ms=start_ms,
-                    end_ms=end_ms,
-                    symbol=normalized_symbol,
-                )
-                futures_bills_payload = self.fetcher.fetch_futures_bills(
-                    profile_name=profile_name,
-                    start_ms=start_ms,
-                    end_ms=end_ms,
-                    symbol=normalized_symbol,
-                )
-                futures_pending_history_payload = self.fetcher.fetch_futures_historical_pending_orders(
-                    profile_name=profile_name,
-                    start_ms=start_ms,
-                    end_ms=end_ms,
-                    symbol=normalized_symbol,
-                )
-                orders.extend(_normalize_orders(futures_pending_history_payload, "futures"))
-                fills.extend(_normalize_fills(futures_fills_payload, "futures"))
-                bills.extend(_normalize_bills(futures_bills_payload, "futures"))
-                futures_meta_sources.extend(
-                    [
-                        futures_pending_history_payload,
-                        futures_fills_payload,
-                        futures_bills_payload,
-                    ]
-                )
-            for source in futures_meta_sources:
-                meta = _extract_meta(source)
-                if meta.get("partial"):
-                    partial = True
-                _merge_degraded_reasons(degraded_reasons, list(meta.get("degraded_reasons") or []))
-                _merge_constraints(constraints, list(meta.get("constraints") or []))
-            if normalized_symbol:
-                price_series.extend(
-                    _normalize_klines(
-                        self.fetcher.fetch_futures_klines(
-                            symbol=normalized_symbol,
-                            start_ms=start_ms,
-                            end_ms=end_ms,
-                        ),
-                        "futures",
-                        normalized_symbol,
-                    )
-                )
-
-        if self.fetcher is not None and normalized_market in {"spot", "all"} and normalized_symbol:
-            spot_balances, spot_balance_partial = self._collect_spot_balances(
-                profile_name=profile_name,
-                degraded_reasons=degraded_reasons,
-            )
-            spot_orders_payload = self.fetcher.fetch_spot_orders(
-                profile_name=profile_name,
-                start_ms=start_ms,
-                end_ms=end_ms,
-                symbol=normalized_symbol,
-            )
-            spot_fills_payload = self.fetcher.fetch_spot_fills(
-                profile_name=profile_name,
-                start_ms=start_ms,
-                end_ms=end_ms,
-                symbol=normalized_symbol,
-            )
-            try:
-                spot_bills_payload = self.fetcher.fetch_spot_bills(
-                    profile_name=profile_name,
-                    start_ms=start_ms,
-                    end_ms=end_ms,
-                    symbol=normalized_symbol,
-                )
-            except AggregationInputError as exc:
-                if _should_degrade_spot_bills_error(exc):
-                    partial = True
-                    _merge_degraded_reasons(degraded_reasons, ["spot_bills_unavailable"])
-                    spot_bills_payload = {"items": []}
-                else:
-                    raise
-            partial = partial or spot_balance_partial
-            balances.extend(spot_balances)
-            orders.extend(_normalize_orders(spot_orders_payload, "spot"))
-            fills.extend(_normalize_fills(spot_fills_payload, "spot"))
-            bills.extend(_normalize_bills(spot_bills_payload, "spot"))
-            for source in (spot_orders_payload, spot_fills_payload, spot_bills_payload):
-                meta = _extract_meta(source)
-                if meta.get("partial"):
-                    partial = True
-                _merge_degraded_reasons(degraded_reasons, list(meta.get("degraded_reasons") or []))
-                _merge_constraints(constraints, list(meta.get("constraints") or []))
-            try:
-                spot_kline_payload = self.fetcher.fetch_spot_klines(
-                    profile_name=profile_name,
-                    symbol=normalized_symbol,
-                )
-            except AggregationInputError as exc:
-                if _should_degrade_spot_kline_error(exc):
-                    partial = True
-                    _merge_degraded_reasons(degraded_reasons, ["spot_kline_unavailable"])
-                else:
-                    raise
-            else:
-                price_series.extend(
-                    _normalize_klines(
-                        spot_kline_payload,
-                        "spot",
-                        normalized_symbol,
-                    )
-                )
-                _merge_degraded_reasons(degraded_reasons, ["spot_kline_window_unbounded"])
-            if normalized_period in {"180d", "360d"}:
-                partial = True
-
-        closed_trade_count = _count_closed_trades(fills, orders)
-        closed_episode_stats = _collect_closed_episode_stats(fills, orders)
-        reconstructed_closed_trade_count = len(closed_episode_stats)
-        if _has_replay_carry_in(fills, orders):
-            partial = True
-            _merge_degraded_reasons(degraded_reasons, ["replay_carry_in_detected"])
-        if any(episode.get("net_pnl") is None for episode in closed_episode_stats):
-            partial = True
-            _merge_degraded_reasons(degraded_reasons, ["replay_episode_pnl_unavailable"])
-        bill_summary = _summarize_bill_adjustments(bills, fallback_market=normalized_market)
-        if bill_summary.get("unclassified_bill_types"):
-            _merge_degraded_reasons(degraded_reasons, ["replay_bill_types_unclassified"])
-
-        return {
-            "analysis_type": "replay",
-            "trading_mode": mode,
-            "environment": environment,
-            "user_environment_prefix": _user_environment_prefix(environment),
-            "market": normalized_market,
-            "period": normalized_period,
-            "symbol": normalized_symbol,
-            "focus": str(focus).strip().lower() if focus else None,
-            "time_range": {
-                "start_ms": start_ms,
-                "end_ms": end_ms,
-            },
-            "closed_trade_count": closed_trade_count,
-            "reconstructed_closed_trade_count": reconstructed_closed_trade_count,
-            "orders": orders,
-            "fills": fills,
-            "positions": positions,
-            "balances": balances,
-            "bills": bills,
-            "price_series": price_series,
-            "constraints": constraints,
-            "partial": partial,
-            "degraded_reasons": degraded_reasons,
-        }
-
-    def collect_profile_payload(
-        self,
-        *,
-        profile_name: str,
-        market: str,
-        trading_mode: str = DEFAULT_TRADING_MODE,
-        symbol: str | None = None,
-    ) -> dict[str, Any]:
-        last_payload: dict[str, Any] | None = None
-        for index, period in enumerate(PROFILE_PERIODS):
-            payload = self.collect_replay_payload(
-                profile_name=profile_name,
-                market=market,
-                trading_mode=trading_mode,
-                period=period,
-                symbol=symbol,
-                focus="profile",
-            )
-            payload["profile_period_candidate"] = period
-            last_payload = payload
-            sample_trade_count = _profile_sample_trade_count(payload)
-            sample_quality = _sample_quality(sample_trade_count)
-            if sample_quality != "minimal":
-                payload["raw_closed_trade_count"] = int(payload.get("closed_trade_count") or 0)
-                payload["closed_trade_count"] = sample_trade_count
-                payload["selected_period"] = period
-                payload["fallback_applied"] = index > 0
-                payload["analysis_type"] = "profile"
-                payload["sample_quality"] = sample_quality
-                return payload
-
-        if last_payload is None:
-            raise AggregationInputError("Unable to build a profile payload without replay candidates.")
-
-        sample_trade_count = _profile_sample_trade_count(last_payload)
-        last_payload["raw_closed_trade_count"] = int(last_payload.get("closed_trade_count") or 0)
-        last_payload["closed_trade_count"] = sample_trade_count
-        last_payload["analysis_type"] = "profile"
-        last_payload["selected_period"] = PROFILE_PERIODS[-1]
-        last_payload["fallback_applied"] = len(PROFILE_PERIODS) > 1
-        last_payload["sample_quality"] = _sample_quality(sample_trade_count)
-        return last_payload
-
     def collect_order_risk_payload(
         self,
         *,
@@ -1848,7 +1163,7 @@ class TradeDataAggregator:
         mode = _validate_trading_mode_market(trading_mode, normalized_market)
         environment = _environment_for_trading_mode(mode, normalized_market)
         if normalized_market == "all":
-            raise AggregationInputError("order risk preview requires a concrete market, not 'all'.")
+            raise AggregationInputError("order preview requires a concrete market, not 'all'.")
 
         symbol = str(_pick(raw_order, "symbol") or "").strip().upper() or None
         tp_trigger = _pick(raw_order, "tp_trigger_price", "tpTriggerPrice")
@@ -1877,6 +1192,7 @@ class TradeDataAggregator:
         conditional_orders: list[dict[str, Any]] = []
         open_orders: list[dict[str, Any]] = []
         current_price: float | None = None
+        product_facts: dict[str, Any] | None = None
         end_ms = int(time.time() * 1000)
         start_ms = max(0, end_ms - RECENT_ORDER_LOOKBACK_MS)
 
@@ -1886,6 +1202,9 @@ class TradeDataAggregator:
                 "futures",
                 trading_mode=mode,
             )
+            if not balances:
+                partial = True
+                _merge_degraded_reasons(degraded_reasons, ["futures_balance_unavailable"])
             positions = _normalize_positions(
                 self.fetcher.fetch_futures_positions(profile_name=profile_name, trading_mode=mode),
                 "futures",
@@ -1929,6 +1248,15 @@ class TradeDataAggregator:
                     "futures",
                 )
             if symbol:
+                fetch_product = getattr(self.fetcher, "fetch_futures_product_info", None)
+                if callable(fetch_product):
+                    try:
+                        product_facts = _extract_symbol_product_info(fetch_product(symbol=symbol), symbol)
+                    except Exception:
+                        product_facts = None
+                if product_facts is None:
+                    partial = True
+                    _merge_degraded_reasons(degraded_reasons, ["futures_product_rules_unavailable"])
                 current_price = _safe_current_price(
                     fetch_latest_price=lambda: self.fetcher.fetch_futures_latest_price(symbol=symbol),
                     market="futures",
@@ -1975,6 +1303,15 @@ class TradeDataAggregator:
             )
             partial = partial or recent_orders_partial
             if symbol:
+                fetch_product = getattr(self.fetcher, "fetch_spot_product_info", None)
+                if callable(fetch_product):
+                    try:
+                        product_facts = _extract_symbol_product_info(fetch_product(symbol=symbol), symbol)
+                    except Exception:
+                        product_facts = None
+                if product_facts is None:
+                    partial = True
+                    _merge_degraded_reasons(degraded_reasons, ["spot_product_rules_unavailable"])
                 current_price = _safe_current_price(
                     fetch_latest_price=lambda: self.fetcher.fetch_spot_latest_price(
                         profile_name=profile_name,
@@ -2047,12 +1384,13 @@ class TradeDataAggregator:
                 "symbol": symbol,
                 "current_price": current_price,
             },
+            "product_facts": product_facts,
             "partial": partial,
             "degraded_reasons": degraded_reasons,
             "constraints": constraints,
         }
 
-    def collect_account_risk_payload(
+    def collect_account_facts_payload(
         self,
         *,
         profile_name: str,
@@ -2061,11 +1399,16 @@ class TradeDataAggregator:
         symbol: str | None = None,
         language: str | None = None,
     ) -> dict[str, Any]:
+        """Collect internal account facts for a guarded order decision.
+
+        This method is deliberately not a user-facing account scan or
+        analysis endpoint; callers are the Trader guard and auto-trade runtime.
+        """
         normalized_market = _validate_market(market)
         mode = _validate_trading_mode_market(trading_mode, normalized_market)
         environment = _environment_for_trading_mode(mode, normalized_market)
         if normalized_market == "all":
-            raise AggregationInputError("account risk scan requires a concrete market, not 'all'.")
+            raise AggregationInputError("account facts require a concrete market, not 'all'.")
 
         normalized_symbol = str(symbol).strip().upper() if symbol else None
         partial = False
@@ -2080,6 +1423,7 @@ class TradeDataAggregator:
         open_orders: list[dict[str, Any]]
         conditional_orders: list[dict[str, Any]] = []
         current_price: float | None = None
+        product_facts: dict[str, Any] | None = None
         market_snapshot_symbol = normalized_symbol
 
         if normalized_market == "futures":
@@ -2088,6 +1432,9 @@ class TradeDataAggregator:
                 "futures",
                 trading_mode=mode,
             )
+            if not balances:
+                partial = True
+                _merge_degraded_reasons(degraded_reasons, ["futures_balance_unavailable"])
             positions = _normalize_positions(
                 self.fetcher.fetch_futures_positions(profile_name=profile_name, trading_mode=mode),
                 "futures",
@@ -2138,6 +1485,17 @@ class TradeDataAggregator:
                     conditional_orders=conditional_orders,
                 )
             if market_snapshot_symbol:
+                fetch_product = getattr(self.fetcher, "fetch_futures_product_info", None)
+                if callable(fetch_product):
+                    try:
+                        product_facts = _extract_symbol_product_info(
+                            fetch_product(symbol=market_snapshot_symbol), market_snapshot_symbol
+                        )
+                    except Exception:
+                        product_facts = None
+                if product_facts is None:
+                    partial = True
+                    _merge_degraded_reasons(degraded_reasons, ["futures_product_rules_unavailable"])
                 current_price = _safe_current_price(
                     fetch_latest_price=lambda: self.fetcher.fetch_futures_latest_price(symbol=market_snapshot_symbol),
                     market="futures",
@@ -2192,6 +1550,17 @@ class TradeDataAggregator:
                 "spot",
             )
             if normalized_symbol:
+                fetch_product = getattr(self.fetcher, "fetch_spot_product_info", None)
+                if callable(fetch_product):
+                    try:
+                        product_facts = _extract_symbol_product_info(
+                            fetch_product(symbol=normalized_symbol), normalized_symbol
+                        )
+                    except Exception:
+                        product_facts = None
+                if product_facts is None:
+                    partial = True
+                    _merge_degraded_reasons(degraded_reasons, ["spot_product_rules_unavailable"])
                 current_price = _safe_current_price(
                     fetch_latest_price=lambda: self.fetcher.fetch_spot_latest_price(
                         profile_name=profile_name,
@@ -2228,7 +1597,9 @@ class TradeDataAggregator:
             }
 
         return {
-            "mode": "account_scan",
+            # Internal account facts for a guarded order/authorization check;
+            # this is not an independent account-risk scan interface.
+            "context": "account_facts",
             "trading_mode": mode,
             "environment": environment,
             "user_environment_prefix": _user_environment_prefix(environment, language),
@@ -2243,6 +1614,7 @@ class TradeDataAggregator:
                 "symbol": market_snapshot_symbol,
                 "current_price": current_price,
             },
+            "product_facts": product_facts,
             "partial": partial,
             "degraded_reasons": degraded_reasons,
             "constraints": constraints,
@@ -2274,11 +1646,6 @@ class WeexApiFetcher:
                     "Invalid runtime environment:\n"
                     + "\n".join(f"- {issue}" for issue in environment_validation["issues"])
                 )
-        elif profile_name is None:
-            raise SystemExit(
-                "Trader preview and confirmation require WEEX_API_KEY, WEEX_API_SECRET, and WEEX_API_PASSPHRASE "
-                "when --profile is omitted. Set all three together or pass --profile <name>."
-            )
         else:
             contract_api.ensure_private_runtime_ready(
                 command="trade-aggregator.contract",
@@ -2341,11 +1708,6 @@ class WeexApiFetcher:
                     "Invalid runtime environment:\n"
                     + "\n".join(f"- {issue}" for issue in environment_validation["issues"])
                 )
-        elif profile_name is None:
-            raise SystemExit(
-                "Trader preview and confirmation require WEEX_API_KEY, WEEX_API_SECRET, and WEEX_API_PASSPHRASE "
-                "when --profile is omitted. Set all three together or pass --profile <name>."
-            )
         else:
             spot_api.ensure_private_runtime_ready(
                 command="trade-aggregator.spot",
@@ -2448,23 +1810,6 @@ class WeexApiFetcher:
             )
         return response.get("data")
 
-    def _build_meta_payload(
-        self,
-        rows: list[dict[str, Any]],
-        *,
-        partial: bool,
-        degraded_reasons: list[str],
-    ) -> Any:
-        if not partial and not degraded_reasons:
-            return rows
-        return {
-            "items": rows,
-            "_meta": {
-                "partial": partial,
-                "degraded_reasons": degraded_reasons,
-            },
-        }
-
     def fetch_futures_balance(
         self,
         *,
@@ -2556,167 +1901,6 @@ class WeexApiFetcher:
             ]
         return rows
 
-    def fetch_futures_fills(
-        self,
-        *,
-        profile_name: str,
-        start_ms: int,
-        end_ms: int,
-        symbol: str | None,
-    ) -> Any:
-        rows: list[dict[str, Any]] = []
-        degraded_reasons: list[str] = []
-        partial = False
-
-        def collect_window(window_start: int, window_end: int) -> None:
-            nonlocal partial
-            query: dict[str, Any] = {
-                "startTime": window_start,
-                "endTime": window_end,
-                "limit": FUTURES_FILL_LIMIT,
-            }
-            if symbol:
-                query["symbol"] = symbol
-            payload = self._send_contract_request(
-                profile_name=profile_name,
-                endpoint_key="transaction.get_trade_details",
-                query=query,
-            )
-            page_rows = _extract_list_payload(payload, "items", "trades", "fills")
-            if len(page_rows) >= FUTURES_FILL_LIMIT and (window_end - window_start) > MIN_SPLIT_WINDOW_MS:
-                midpoint = window_start + ((window_end - window_start) // 2)
-                collect_window(window_start, midpoint)
-                collect_window(midpoint + 1, window_end)
-                return
-            if len(page_rows) >= FUTURES_FILL_LIMIT and (window_end - window_start) <= MIN_SPLIT_WINDOW_MS:
-                partial = True
-                _merge_degraded_reasons(degraded_reasons, ["futures_fills_limit_hit"])
-            _extend_unique_dict_rows(rows, page_rows, identity_keys=("id", "tradeId", "orderId", "time", "symbol"))
-
-        for window in split_time_range(start_ms, end_ms, max_span_days=MAX_FUTURES_FILLS_WINDOW_DAYS):
-            collect_window(window.start_ms, window.end_ms)
-        return self._build_meta_payload(rows, partial=partial, degraded_reasons=degraded_reasons)
-
-    def fetch_futures_historical_pending_orders(
-        self,
-        *,
-        profile_name: str,
-        start_ms: int,
-        end_ms: int,
-        symbol: str | None,
-    ) -> Any:
-        rows: list[dict[str, Any]] = []
-        degraded_reasons: list[str] = []
-        partial = False
-
-        def collect_window(window_start: int, window_end: int) -> None:
-            nonlocal partial
-            query: dict[str, Any] = {
-                "startTime": window_start,
-                "endTime": window_end,
-                "limit": FUTURES_ORDER_LIMIT,
-            }
-            if symbol:
-                query["symbol"] = symbol
-            payload = self._send_contract_request(
-                profile_name=profile_name,
-                endpoint_key="transaction.get_historical_pending_orders",
-                query=query,
-            )
-            page_rows = _extract_list_payload(payload, "items", "orders")
-            _extend_unique_dict_rows(
-                rows,
-                page_rows,
-                identity_keys=("algoId", "actualOrderId", "createTime", "symbol"),
-            )
-            has_more = bool((payload or {}).get("hasMore")) if isinstance(payload, dict) else False
-            if not has_more:
-                return
-            if (window_end - window_start) > MIN_SPLIT_WINDOW_MS:
-                midpoint = window_start + ((window_end - window_start) // 2)
-                collect_window(window_start, midpoint)
-                collect_window(midpoint + 1, window_end)
-                return
-            partial = True
-            _merge_degraded_reasons(
-                degraded_reasons,
-                ["futures_historical_pending_orders_window_truncated"],
-            )
-
-        for window in split_time_range(start_ms, end_ms, max_span_days=MAX_FUTURES_WINDOW_DAYS):
-            collect_window(window.start_ms, window.end_ms)
-        return self._build_meta_payload(
-            rows,
-            partial=partial,
-            degraded_reasons=degraded_reasons,
-        )
-
-    def fetch_futures_bills(
-        self,
-        *,
-        profile_name: str,
-        start_ms: int,
-        end_ms: int,
-        symbol: str | None,
-    ) -> Any:
-        rows: list[dict[str, Any]] = []
-        degraded_reasons: list[str] = []
-        partial = False
-
-        def collect_window(window_start: int, window_end: int) -> None:
-            nonlocal partial
-            body: dict[str, Any] = {
-                "startTime": window_start,
-                "endTime": window_end,
-                "limit": FUTURES_BILL_LIMIT,
-            }
-            if symbol:
-                body["symbol"] = symbol
-            seen_cursors: set[tuple[str, str]] = set()
-            while True:
-                payload = self._send_contract_request(
-                    profile_name=profile_name,
-                    endpoint_key="account.get_contract_bills",
-                    query={},
-                    body=body,
-                )
-                page_rows = _extract_list_payload(payload, "items", "bills")
-                _extend_unique_dict_rows(
-                    rows,
-                    page_rows,
-                    identity_keys=("billId", "time", "symbol", "incomeType"),
-                )
-                has_next = bool((payload or {}).get("hasNextPage")) if isinstance(payload, dict) else False
-                if not has_next:
-                    return
-
-                next_key = payload.get("nextKey") if isinstance(payload, dict) else None
-                next_key_id = next_key.get("nextKeyId") if isinstance(next_key, dict) else None
-                next_key_time = next_key.get("nextKeyTime") if isinstance(next_key, dict) else None
-                if next_key_id is not None and next_key_time is not None:
-                    cursor = (str(next_key_id), str(next_key_time))
-                    if cursor in seen_cursors:
-                        partial = True
-                        _merge_degraded_reasons(degraded_reasons, ["futures_bills_cursor_stalled"])
-                        return
-                    seen_cursors.add(cursor)
-                    body["nextKeyId"] = next_key_id
-                    body["nextKeyTime"] = next_key_time
-                    continue
-
-                if (window_end - window_start) > MIN_SPLIT_WINDOW_MS:
-                    midpoint = window_start + ((window_end - window_start) // 2)
-                    collect_window(window_start, midpoint)
-                    collect_window(midpoint + 1, window_end)
-                    return
-                partial = True
-                _merge_degraded_reasons(degraded_reasons, ["futures_bills_window_truncated"])
-                return
-
-        for window in split_time_range(start_ms, end_ms, max_span_days=MAX_BILLS_WINDOW_DAYS):
-            collect_window(window.start_ms, window.end_ms)
-        return self._build_meta_payload(rows, partial=partial, degraded_reasons=degraded_reasons)
-
     def fetch_futures_klines(
         self,
         *,
@@ -2803,89 +1987,6 @@ class WeexApiFetcher:
                 page += 1
         return rows
 
-    def fetch_spot_fills(
-        self,
-        *,
-        profile_name: str,
-        start_ms: int,
-        end_ms: int,
-        symbol: str | None,
-    ) -> Any:
-        if not symbol:
-            return []
-        rows: list[dict[str, Any]] = []
-        degraded_reasons: list[str] = []
-        partial = False
-
-        def collect_window(window_start: int, window_end: int) -> None:
-            nonlocal partial
-            payload = self._send_spot_request(
-                profile_name=profile_name,
-                endpoint_key="spot.order.transaction_details",
-                query={
-                    "symbol": symbol,
-                    "startTime": window_start,
-                    "endTime": window_end,
-                    "limit": SPOT_FILL_LIMIT,
-                },
-            )
-            page_rows = _extract_list_payload(payload, "items", "trades", "fills")
-            if len(page_rows) >= SPOT_FILL_LIMIT and (window_end - window_start) > MIN_SPLIT_WINDOW_MS:
-                midpoint = window_start + ((window_end - window_start) // 2)
-                collect_window(window_start, midpoint)
-                collect_window(midpoint + 1, window_end)
-                return
-            if len(page_rows) >= SPOT_FILL_LIMIT and (window_end - window_start) <= MIN_SPLIT_WINDOW_MS:
-                partial = True
-                _merge_degraded_reasons(degraded_reasons, ["spot_fills_limit_hit"])
-            _extend_unique_dict_rows(rows, page_rows, identity_keys=("id", "orderId", "time", "symbol"))
-
-        for window in split_time_range(start_ms, end_ms, max_span_days=MAX_SPOT_HISTORY_WINDOW_DAYS):
-            collect_window(window.start_ms, window.end_ms)
-        return self._build_meta_payload(rows, partial=partial, degraded_reasons=degraded_reasons)
-
-    def fetch_spot_bills(
-        self,
-        *,
-        profile_name: str,
-        start_ms: int,
-        end_ms: int,
-        symbol: str | None,
-    ) -> Any:
-        del symbol
-        rows: list[dict[str, Any]] = []
-        degraded_reasons: list[str] = []
-        partial = False
-
-        def collect_window(window_start: int, window_end: int) -> None:
-            nonlocal partial
-            body: dict[str, Any] = {
-                "before": window_end + 1,
-                "limit": SPOT_BILL_LIMIT,
-            }
-            if window_start > 0:
-                body["after"] = window_start - 1
-            payload = self._send_spot_request(
-                profile_name=profile_name,
-                endpoint_key="spot.account.get_bill_records",
-                query={},
-                body=body,
-            )
-            page_rows = _extract_list_payload(payload, "items", "bills")
-            if len(page_rows) >= SPOT_BILL_LIMIT and (window_end - window_start) > MIN_SPLIT_WINDOW_MS:
-                midpoint = window_start + ((window_end - window_start) // 2)
-                collect_window(window_start, midpoint)
-                collect_window(midpoint + 1, window_end)
-                return
-            if len(page_rows) >= SPOT_BILL_LIMIT and (window_end - window_start) <= MIN_SPLIT_WINDOW_MS:
-                partial = True
-                _merge_degraded_reasons(degraded_reasons, ["spot_bills_window_truncated"])
-            _extend_unique_dict_rows(rows, page_rows, identity_keys=("billId", "cTime", "coinName", "bizType"))
-
-        for window in split_time_range(start_ms, end_ms, max_span_days=MAX_SPOT_HISTORY_WINDOW_DAYS):
-            collect_window(window.start_ms, window.end_ms)
-        return self._build_meta_payload(rows, partial=partial, degraded_reasons=degraded_reasons)
-
     def fetch_spot_klines(
         self,
         *,
@@ -2910,6 +2011,22 @@ class WeexApiFetcher:
                 "symbol": symbol,
                 "priceType": "MARK",
             },
+            public=True,
+        )
+
+    def fetch_futures_product_info(self, *, symbol: str) -> Any:
+        return self._send_contract_request(
+            profile_name="",
+            endpoint_key="market.get_contract_info",
+            query={"symbol": symbol},
+            public=True,
+        )
+
+    def fetch_spot_product_info(self, *, symbol: str) -> Any:
+        return self._send_spot_request(
+            profile_name="",
+            endpoint_key="spot.config.get_product_info",
+            query={"symbol": symbol},
             public=True,
         )
 
@@ -3013,89 +2130,11 @@ def _parse_order_json(raw: str) -> dict[str, Any]:
     return payload
 
 
-def cmd_collect_replay(args: argparse.Namespace) -> int:
-    payload = TradeDataAggregator().collect_replay_payload(
-        profile_name=args.profile,
-        market=args.market,
-        trading_mode=getattr(args, "trading_mode", DEFAULT_TRADING_MODE),
-        period=args.period,
-        symbol=args.symbol,
-        focus=args.focus,
-    )
-    _output_json(payload, args.pretty)
-    return 0
-
-
-def cmd_collect_profile(args: argparse.Namespace) -> int:
-    payload = TradeDataAggregator().collect_profile_payload(
-        profile_name=args.profile,
-        market=args.market,
-        trading_mode=getattr(args, "trading_mode", DEFAULT_TRADING_MODE),
-        symbol=args.symbol,
-    )
-    _output_json(payload, args.pretty)
-    return 0
-
-
-def cmd_collect_order_risk(args: argparse.Namespace) -> int:
-    payload = TradeDataAggregator().collect_order_risk_payload(
-        profile_name=args.profile,
-        market=args.market,
-        trading_mode=getattr(args, "trading_mode", DEFAULT_TRADING_MODE),
-        raw_order=_parse_order_json(args.order_json),
-    )
-    _output_json(payload, args.pretty)
-    return 0
-
-
-def cmd_collect_account_risk(args: argparse.Namespace) -> int:
-    payload = TradeDataAggregator().collect_account_risk_payload(
-        profile_name=args.profile,
-        market=args.market,
-        trading_mode=getattr(args, "trading_mode", DEFAULT_TRADING_MODE),
-        symbol=args.symbol,
-        language=_arg_value(args, "language", None),
-    )
-    _output_json(payload, args.pretty)
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Collect normalized WEEX trading data for replay, profile, and risk analysis."
+        description="Collect internal order-risk data for the WEEX Trader guard."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    collect_replay = subparsers.add_parser("collect-replay", help="Collect replay payload data.")
-    collect_replay.add_argument("--profile", required=True, help="Saved profile name.")
-    collect_replay.add_argument("--market", required=True, choices=("futures", "spot", "all"))
-    collect_replay.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
-    collect_replay.add_argument("--period", required=True, choices=COLLECTION_PERIODS)
-    collect_replay.add_argument("--symbol", default=None, help="Trading pair symbol when required.")
-    collect_replay.add_argument("--focus", default=None, help="Optional replay focus tag.")
-    collect_replay.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
-
-    collect_profile = subparsers.add_parser("collect-profile", help="Collect profile payload data.")
-    collect_profile.add_argument("--profile", required=True, help="Saved profile name.")
-    collect_profile.add_argument("--market", required=True, choices=("futures", "spot", "all"))
-    collect_profile.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
-    collect_profile.add_argument("--symbol", default=None, help="Trading pair symbol when required.")
-    collect_profile.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
-
-    collect_order_risk = subparsers.add_parser("collect-order-risk", help="Collect order-risk payload data.")
-    collect_order_risk.add_argument("--profile", required=True, help="Saved profile name.")
-    collect_order_risk.add_argument("--market", required=True, choices=("futures", "spot"))
-    collect_order_risk.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
-    collect_order_risk.add_argument("--order-json", required=True, help="JSON order payload.")
-    collect_order_risk.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
-
-    collect_account_risk = subparsers.add_parser("collect-account-risk", help="Collect account-risk payload data.")
-    collect_account_risk.add_argument("--profile", required=True, help="Saved profile name.")
-    collect_account_risk.add_argument("--market", required=True, choices=("futures", "spot"))
-    collect_account_risk.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
-    collect_account_risk.add_argument("--symbol", default=None, help="Optional trading pair focus.")
-    collect_account_risk.add_argument("--language", choices=("zh", "en"), default=None, help="Language for user-facing environment prefix.")
-    collect_account_risk.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     return parser
 
@@ -3103,14 +2142,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        if args.command == "collect-replay":
-            return cmd_collect_replay(args)
-        if args.command == "collect-profile":
-            return cmd_collect_profile(args)
-        if args.command == "collect-order-risk":
-            return cmd_collect_order_risk(args)
-        if args.command == "collect-account-risk":
-            return cmd_collect_account_risk(args)
         raise SystemExit(f"Unsupported command: {args.command}")
     except AggregationInputError as exc:
         _output_error(str(exc), bool(getattr(args, "pretty", False)))
@@ -3119,17 +2150,10 @@ def main(argv: list[str] | None = None) -> int:
 
 __all__ = [
     "AggregationInputError",
-    "DAY_MS",
-    "PROFILE_PERIODS",
-    "REPLAY_PERIODS",
     "TimeWindow",
     "TradeDataAggregator",
     "WeexApiFetcher",
     "build_parser",
-    "cmd_collect_account_risk",
-    "cmd_collect_order_risk",
-    "cmd_collect_profile",
-    "cmd_collect_replay",
     "main",
     "split_time_range",
 ]

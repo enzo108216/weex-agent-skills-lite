@@ -33,10 +33,17 @@ Natural-language orders must use the guard:
 
 ```bash
 python3 scripts/weex_trade_guard.py preview-order --profile <name> --language zh --order-json '{...}' --pretty
-python3 scripts/weex_trade_guard.py confirm-order --profile <name> --language zh --confirm-live --pretty
+python3 scripts/weex_trade_guard.py confirm-order --profile <name> --language zh --user-reply '确认' --confirm-live --pretty
 ```
 
-Use `preview-tp-sl`/`confirm-tp-sl` for official futures TP/SL. The confirmation command must consume the exact reply text from the latest independent preview; changed fields, mode, expired intents, stale facts, and mismatches are rejected. Real writes require `--confirm-live`; official futures demo writes require `--trading-mode demo --confirm-demo`.
+Use `preview-tp-sl`/`confirm-tp-sl` for official futures TP/SL. The confirmation command must consume the exact reply text from the latest independent preview via `--user-reply`; changed fields, mode, expired intents, stale facts, and mismatches are rejected. Real writes require `--confirm-live`; official futures demo writes require `--trading-mode demo --confirm-demo`.
+
+Order cancellation uses the same binding:
+
+```bash
+python3 scripts/weex_trade_guard.py preview-cancel --profile <name> --market futures --order-id <id> --language zh --pretty
+python3 scripts/weex_trade_guard.py confirm-cancel --profile <name> --intent-id <id> --risk-signature <signature> --user-reply '确认' --pretty
+```
 
 ## Automated-strategy authorization
 
@@ -44,14 +51,23 @@ The JSON facade is the only supported automatic-order boundary. Strategies call 
 
 ```bash
 python3 scripts/weex_auto_trade.py register-strategy --input @register-strategy.json --pretty
+python3 scripts/weex_auto_trade.py list-strategies --input @profile.json --pretty
 python3 scripts/weex_auto_trade.py ensure-authorization --input @ensure-authorization.json --pretty
 python3 scripts/weex_auto_trade.py show-authorization-request --input @show-authorization-request.json --pretty
 python3 scripts/weex_auto_trade.py grant-authorization --input @grant-authorization.json --confirm-live --pretty
+python3 scripts/weex_auto_trade.py list-authorizations --input @profile.json --pretty
 python3 scripts/weex_auto_trade.py submit-auto --input @submit-auto.json --confirm-live --pretty
 python3 scripts/weex_auto_trade.py revoke-authorization --input @revoke-authorization.json --pretty
+python3 scripts/weex_auto_trade.py retire-strategy --input @retire-strategy.json --pretty
+python3 scripts/weex_auto_trade.py event-list --input @strategy.json --pretty
+python3 scripts/weex_auto_trade.py reconcile-auto-order --input @reconcile-auto-order.json --pretty
+python3 scripts/weex_auto_trade.py resolve-auto-usage --input @resolve-auto-usage.json --confirm-live --pretty
+python3 scripts/weex_auto_trade.py snapshot-state --input @snapshot-state.json --pretty
+python3 scripts/weex_auto_trade.py restore-state --input @restore-state.json --confirm-live --pretty
+python3 scripts/weex_auto_trade.py enable-auto-trading-after-restore --input @enable-auto-trading.json --confirm-live --pretty
 ```
 
-Every authorization request includes Spot/Futures modules, selected symbols or all symbols, conservative per-leg U maximum, cumulative conservative U quota, and `valid_hours` from 1 through 720. Never derive the cumulative quota. Granting changes local authorization state and does not submit an order. Automatic submissions still require fresh official facts, product/risk/balance checks, scope/quota checks, atomic reservations, and durable per-leg audit. Unknown or uncertain results become `REVIEW_REQUIRED` and are never retried.
+Every authorization request includes Spot/Futures modules, selected symbols or all symbols, conservative per-leg U maximum, cumulative conservative U quota, and `valid_hours` greater than 0 and no more than 720 hours. Never derive the cumulative quota. Granting changes local authorization state and does not submit an order. Automatic submissions still require fresh official facts, product/risk/balance checks, scope/quota checks, atomic reservations, and durable per-leg audit. Unknown or uncertain results become `REVIEW_REQUIRED` and are never retried.
 
 Use `event-list`, `reconcile-auto-order`, and `resolve-auto-usage` for read-only audit/reconciliation. Accepted conservative usage is never refunded by later fills or lower fees. Full-position TP/SL, unproven reduce-only behavior, missing conversion/depth/leverage/fee facts, and unsupported operations return to manual preview.
 

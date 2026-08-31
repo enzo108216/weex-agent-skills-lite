@@ -49,9 +49,7 @@ DEMO_KEY_MAP = {
     "PlaceOrder": "sim.transaction.place_order",
 }
 
-EXCLUDED_DOC_URLS = {
-    "https://www.weex.com/api-doc/partner/rebate-endpoints/GetInternalWithdrawalStatus",
-}
+EXCLUDED_DOC_URLS: set[str] = set()
 
 
 @dataclass
@@ -126,8 +124,6 @@ def parse_rate_limits(text: str) -> tuple[Optional[int], List[Dict[str, Any]]]:
 def get_group(product: str, path_parts: List[str]) -> Optional[str]:
     if product == "contract" and len(path_parts) > 2 and path_parts[2] == "demo":
         return "sim"
-    if product == "spot" and len(path_parts) > 2 and path_parts[1] == "partner":
-        return "rebate"
     group_segment = path_parts[2] if len(path_parts) > 2 else ""
     if product == "contract":
         return CONTRACT_GROUP_MAP.get(group_segment)
@@ -384,11 +380,11 @@ def parse_doc(url: str) -> Optional[ParsedDoc]:
     if len(path_parts) < 4 or path_parts[0] != "api-doc":
         return None
     source_product = path_parts[1]
-    if source_product not in {"contract", "spot", "partner"}:
+    if source_product not in {"contract", "spot"}:
         return None
     if "V2" in path_parts or "zh-CN" in path_parts:
         return None
-    product = "spot" if source_product == "partner" else source_product
+    product = source_product
 
     category = get_group(product, path_parts)
     if category is None:
@@ -409,7 +405,7 @@ def parse_doc(url: str) -> Optional[ParsedDoc]:
     weight_ip, rate_limits = parse_rate_limits(clean_text(markdown.get_text(" ", strip=True)))
     permission_match = re.search(r"\((USER_DATA|TRADE)\)", title)
     permission = permission_match.group(1) if permission_match else None
-    requires_auth = permission is not None or category == "rebate"
+    requires_auth = permission is not None
 
     request_params, response_params, constraints = _extract_sections(markdown)
     request_transport = _request_transport(
@@ -453,7 +449,6 @@ def iter_doc_urls(product: str, sitemap_urls: Iterable[str]) -> List[str]:
         if product == "spot":
             included = bool(
                 re.search(r"/api-doc/spot/(?:AccountAPI|ConfigAPI|MarketDataAPI|orderApi|tax)/", url)
-                or re.search(r"/api-doc/partner/rebate-endpoints/", url)
             )
         else:
             included = bool(

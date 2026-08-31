@@ -48,7 +48,7 @@ GET_BODY_UNSUPPORTED_MESSAGE = (
 PRIVATE_PROFILE_REQUIRED_MESSAGE = (
     "Private commands require WEEX_API_KEY, WEEX_API_SECRET, and WEEX_API_PASSPHRASE "
     "or a saved profile. Configure the environment variables, configure a default profile "
-    "with scripts/weex_profile_manager.py or scripts/weex_profiles.py, or pass --profile <name>."
+    "with scripts/weex_profiles.py, or pass --profile <name>."
 )
 PROFILE_RUNTIME_DEPENDENCY_MISSING = (
     "Unable to enable saved-profile support for the WEEX Contract REST API helper "
@@ -75,6 +75,8 @@ class Endpoint:
     request_transport: str = "query"
     query_fields: tuple[str, ...] = ()
     body_fields: tuple[str, ...] = ()
+    required_query_fields: tuple[str, ...] = ()
+    required_body_fields: tuple[str, ...] = ()
 
 
 def load_endpoint_map() -> Dict[str, Endpoint]:
@@ -98,6 +100,20 @@ def load_endpoint_map() -> Dict[str, Endpoint]:
             request_transport=str(d.get("request_transport", "query")),
             query_fields=tuple(str(value) for value in d.get("query_fields", [])),
             body_fields=tuple(str(value) for value in d.get("body_fields", [])),
+            required_query_fields=tuple(
+                str(item["name"])
+                for item in d.get("request_params", [])
+                if isinstance(item, dict)
+                and item.get("name") in d.get("query_fields", [])
+                and str(item.get("required", "")).strip().lower() in {"yes", "required"}
+            ),
+            required_body_fields=tuple(
+                str(item["name"])
+                for item in d.get("request_params", [])
+                if isinstance(item, dict)
+                and item.get("name") in d.get("body_fields", [])
+                and str(item.get("required", "")).strip().lower() in {"yes", "required"}
+            ),
         )
         endpoint_map[ep.key] = ep
     return endpoint_map
@@ -155,6 +171,18 @@ def compact_json(value: Optional[Dict[str, Any]]) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
+def _business_error(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("success") is False:
+        return True
+    error_code = payload.get("errorCode")
+    if error_code not in (None, "", 0, "0", "00000"):
+        return True
+    code = payload.get("code")
+    return code not in (None, "", 0, "0", "00000", "SUCCESS")
+
+
 class WeexContractClient:
     def __init__(
         self,
@@ -200,8 +228,7 @@ class WeexContractClient:
             if self.profile_name:
                 raise SystemExit(
                     f"Missing private API credentials in profile '{self.profile_name}'. "
-                    "Update the saved profile with scripts/weex_profile_manager.py "
-                    "or scripts/weex_profiles.py and retry: "
+                    "Update the saved profile with scripts/weex_profiles.py and retry: "
                     + ", ".join(missing)
                 )
             raise SystemExit(PRIVATE_PROFILE_REQUIRED_MESSAGE)
@@ -228,6 +255,7 @@ class WeexContractClient:
         method = endpoint.method.upper()
         q = query or {}
         b = body or {}
+        self._validate_payload_fields(endpoint, q, b)
         if method == "GET" and b:
             raise SystemExit(GET_BODY_UNSUPPORTED_MESSAGE)
         if endpoint.request_transport == "query" and b:
@@ -278,6 +306,36 @@ class WeexContractClient:
             "body": b,
         }
 
+    @staticmethod
+    def _validate_payload_fields(
+        endpoint: Endpoint,
+        query: Dict[str, Any],
+        body: Dict[str, Any],
+    ) -> None:
+        unknown_query = sorted(set(query) - set(endpoint.query_fields))
+        unknown_body = sorted(set(body) - set(endpoint.body_fields))
+        if unknown_query:
+            raise SystemExit(
+                f"unknown query fields for {endpoint.key}: {', '.join(unknown_query)}"
+            )
+        if unknown_body:
+            raise SystemExit(
+                f"unknown body fields for {endpoint.key}: {', '.join(unknown_body)}"
+            )
+        missing_query = [
+            field
+            for field in endpoint.required_query_fields
+            if query.get(field) in (None, "")
+        ]
+        missing_body = [
+            field
+            for field in endpoint.required_body_fields
+            if body.get(field) in (None, "")
+        ]
+        if missing_query or missing_body:
+            missing = ", ".join([*missing_query, *missing_body])
+            raise SystemExit(f"missing required request fields for {endpoint.key}: {missing}")
+
     def send(self, prepared: Dict[str, Any]) -> Dict[str, Any]:
         req = request.Request(
             url=prepared["url"],
@@ -292,6 +350,8 @@ class WeexContractClient:
                     payload = json.loads(raw)
                 except json.JSONDecodeError:
                     payload = {"raw": raw}
+                if _business_error(payload):
+                    return {"ok": False, "status": resp.status, "error": payload}
                 return {"ok": True, "status": resp.status, "data": payload}
         except error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
@@ -330,8 +390,12 @@ def output_json(payload: Dict[str, Any], pretty: bool) -> None:
         print(json.dumps(payload, ensure_ascii=False))
 
 
-def normalize_trading_mode(raw: str) -> str:
-    mode = (raw or "").strip().lower()
+def normalize_trading_mode(raw: str | None, *, required: bool = False) -> str:
+    if raw in (None, ""):
+        if required:
+            raise SystemExit("trading_mode_required: choose live or demo for private contract operations")
+        return DEFAULT_TRADING_MODE
+    mode = str(raw).strip().lower()
     if mode not in TRADING_MODES:
         raise SystemExit(f"invalid_trading_mode: expected one of {', '.join(TRADING_MODES)}")
     return mode
@@ -507,11 +571,41 @@ def execute_endpoint(
     dry_run: bool,
     confirm_live: bool,
     confirm_demo: bool,
-    trading_mode: str,
+    trading_mode: str | None,
     pretty: bool,
 ) -> int:
+    if trading_mode in (None, "") and ENDPOINTS[endpoint_key].auth:
+        raise SystemExit("trading_mode_required: choose live or demo for private contract operations")
+    effective_mode = normalize_trading_mode(trading_mode)
+    code, payload = execute_endpoint_payload(
+        client=client,
+        endpoint_key=endpoint_key,
+        query=query,
+        body=body,
+        dry_run=dry_run,
+        confirm_live=confirm_live,
+        confirm_demo=confirm_demo,
+        trading_mode=effective_mode,
+    )
+    output_json(payload, pretty)
+    return code
+
+
+def execute_endpoint_payload(
+    *,
+    client: WeexContractClient,
+    endpoint_key: str,
+    query: Dict[str, Any],
+    body: Dict[str, Any],
+    dry_run: bool,
+    confirm_live: bool,
+    confirm_demo: bool,
+    trading_mode: str | None,
+) -> tuple[int, Dict[str, Any]]:
     endpoint = ENDPOINTS[endpoint_key]
-    mode = validate_endpoint_trading_mode(endpoint, trading_mode)
+    if trading_mode in (None, "") and endpoint.auth:
+        raise SystemExit("trading_mode_required: choose live or demo for private contract operations")
+    mode = validate_endpoint_trading_mode(endpoint, normalize_trading_mode(trading_mode))
     validate_confirm_flags(endpoint, mode, dry_run, confirm_live, confirm_demo)
     validate_pending_order_routing(endpoint, body)
     validate_endpoint_constraints(endpoint, query, body)
@@ -534,8 +628,7 @@ def execute_endpoint(
         }
         if environment is not None:
             add_environment_context(preview, environment)
-        output_json(preview, pretty)
-        return 0
+        return 0, preview
 
     response = client.send(prepared)
     payload = {
@@ -548,8 +641,7 @@ def execute_endpoint(
     }
     if environment is not None:
         add_environment_context(payload, environment)
-    output_json(payload, pretty)
-    return 0 if response.get("ok") else 1
+    return (0 if response.get("ok") else 1), payload
 
 
 def generate_client_oid() -> str:
@@ -670,7 +762,7 @@ def cmd_call(args: argparse.Namespace, client: WeexContractClient) -> int:
 
 
 def cmd_place_order(args: argparse.Namespace, client: WeexContractClient) -> int:
-    mode = normalize_trading_mode(args.trading_mode)
+    mode = normalize_trading_mode(args.trading_mode, required=True)
     body_symbol = (
         normalize_contract_demo_trade_symbol(args.symbol)
         if mode == "demo"
@@ -789,8 +881,8 @@ def add_trading_mode_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--trading-mode",
         choices=TRADING_MODES,
-        default=DEFAULT_TRADING_MODE,
-        help="Trading mode for private contract endpoints",
+        default=None,
+        help="Explicit trading mode for private contract endpoints",
     )
 
 

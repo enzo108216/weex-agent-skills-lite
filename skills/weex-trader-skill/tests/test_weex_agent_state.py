@@ -20,6 +20,16 @@ from weex_gui_bootstrap import RuntimeProbe  # noqa: E402
 
 
 class AgentStateGuiRuntimeTests(unittest.TestCase):
+    def test_competition_routes_profile_and_vault_management_to_cli_only(self) -> None:
+        self.assertEqual(
+            agent_state._route_profile_management("Darwin", "en", True, "desktop_interactive"),
+            "macos_cli_en",
+        )
+        self.assertEqual(
+            agent_state._route_vault_management("Windows", "zh", True, "desktop_interactive"),
+            "windows_cli_zh",
+        )
+
     def test_preflight_routes_distinguish_direct_environment_and_saved_profile_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             with mock.patch.dict(os.environ, {"WEEX_TRADER_SKILL_HOME": tempdir}, clear=False):
@@ -30,7 +40,7 @@ class AgentStateGuiRuntimeTests(unittest.TestCase):
             payload["routes"]["private_api_requires"],
             [
                 "direct_contract_spot:complete_environment_credentials_or_saved_profile",
-                "partner_aggregation_trade_guard:saved_profile",
+                "automated_authorization:saved_profile",
                 "vault_ready_for_saved_profile_paths",
             ],
         )

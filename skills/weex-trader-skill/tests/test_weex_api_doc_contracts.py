@@ -165,20 +165,18 @@ class GeneratorRegressionTests(unittest.TestCase):
         self.assertEqual(parsed.body_fields, [])
         self.assertEqual(parsed.response_container, "conditional_object_or_array")
 
-    def test_url_collection_includes_tax_current_partner_rebate_and_demo_pages(self) -> None:
+    def test_url_collection_includes_tax_and_demo_pages_but_excludes_partner_pages(self) -> None:
         generator = load_generator()
         tax = "https://www.weex.com/api-doc/spot/tax/GetSpotAccountRecord"
         rebate = "https://www.weex.com/api-doc/partner/rebate-endpoints/GetAffiliateCommission"
-        removed = "https://www.weex.com/api-doc/partner/rebate-endpoints/GetInternalWithdrawalStatus"
         demo = "https://www.weex.com/api-doc/contract/demo/PlaceOrder"
-        urls = [tax, rebate, removed, demo]
+        urls = [tax, rebate, demo]
 
         spot_urls = generator.iter_doc_urls("spot", urls)
         contract_urls = generator.iter_doc_urls("contract", urls)
 
         self.assertIn(tax, spot_urls)
-        self.assertIn(rebate, spot_urls)
-        self.assertNotIn(removed, spot_urls)
+        self.assertNotIn(rebate, spot_urls)
         self.assertIn(demo, contract_urls)
 
 
@@ -216,7 +214,7 @@ class CheckedInDefinitionRegressionTests(unittest.TestCase):
                         )
     def test_spot_definitions_match_current_official_contract(self) -> None:
         payload, by_key = load_definitions("spot")
-        self.assertEqual(len(payload["definitions"]), 33)
+        self.assertEqual(len(payload["definitions"]), 25)
 
         account = by_key["spot.account.get_account_balance"]
         self.assertEqual(account["path"], "/api/v3/account")
@@ -249,23 +247,9 @@ class CheckedInDefinitionRegressionTests(unittest.TestCase):
             {"billId", "coinId", "coinName", "bizType", "fillSize", "fillValue", "deltaAmount", "afterAmount", "fees", "cTime"},
         )
 
-        rebate = by_key["spot.rebate.get_affiliate_commission"]
-        self.assertIn("/partner/rebate-endpoints/", rebate["doc_url"])
-        self.assertEqual(
-            set(params_by_name(rebate, "request_params")),
-            {"uid", "startTime", "endTime", "coin", "productType", "page", "pageSize"},
-        )
-
         ping_response = params_by_name(by_key["spot.config.ping"], "response_params")["$"]
         self.assertEqual(ping_response["type"], "Object")
         self.assertIn("empty JSON object", ping_response["description"])
-
-        withdrawal_response = params_by_name(
-            by_key["spot.rebate.internal_withdrawal"],
-            "response_params",
-        )["$"]
-        self.assertEqual(withdrawal_response["type"], "String")
-        self.assertIn("transfer ID", withdrawal_response["description"])
 
         api_symbols = by_key["spot.config.get_api_trading_symbols"]
         self.assertEqual(api_symbols["response_container"], "array")

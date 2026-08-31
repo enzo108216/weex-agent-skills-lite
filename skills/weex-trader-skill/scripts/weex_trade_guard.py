@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Preview order risk and enforce confirmation before live WEEX order submission."""
+"""Preview validated orders and enforce confirmation before WEEX submission."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -14,11 +15,11 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-import weex_trade_risk_review as analysis
 from weex_auto_trade_amount import ValuationUnavailable, estimate_order_amount
 from weex_auto_trade_state import StateConflictError
 from weex_order_intent_state import (
     build_intent,
+    build_risk_signature,
     clear_intent,
     intent_signature_is_valid,
     intent_is_expired,
@@ -32,11 +33,11 @@ from weex_trade_data_aggregator import AggregationInputError, TradeDataAggregato
 CONFIRMATION_PROMPTS = {
     "zh": {
         "reply_text": "确认",
-        "reply_instruction": "如果你接受上述风险并要继续，请回复：确认",
+        "reply_instruction": "如果确认继续，请回复：确认",
     },
     "en": {
         "reply_text": "confirm",
-        "reply_instruction": "If you accept the risks and want to continue, reply: confirm",
+        "reply_instruction": "To continue, reply: confirm",
     },
 }
 AUTO_TRADE_AUTHORIZATION_HINTS = {
@@ -66,6 +67,14 @@ AUTO_TRADE_DEFINITION_FILES = {
     "FUTURES": "contract-api-definitions.json",
 }
 ADVISORY_DEGRADED_REASONS = frozenset({"spot_equity_estimate_partial"})
+MANUAL_ADVISORY_DEGRADED_REASONS = ADVISORY_DEGRADED_REASONS | frozenset(
+    {
+        "demo_futures_open_orders_unavailable",
+        "demo_futures_conditional_orders_unavailable",
+        "demo_futures_tp_sl_state_unavailable",
+        "spot_tp_sl_state_unavailable",
+    }
+)
 AUTO_TRADE_RAW_CREDENTIAL_KEYS = frozenset(
     {
         "apikey",
@@ -77,6 +86,235 @@ AUTO_TRADE_RAW_CREDENTIAL_KEYS = frozenset(
         "vaultpassword",
     }
 )
+
+
+class SubmissionUncertainError(AggregationInputError):
+    """The exchange response cannot prove whether a write was accepted."""
+
+
+def _positive_decimal(value: Any, field: str) -> str | None:
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not parsed.is_finite() or parsed <= 0:
+        return None
+    return str(value).strip()
+
+
+def validate_manual_order(market: str, raw_order: dict[str, Any]) -> list[str]:
+    """Validate the conversational order shape before any account/API call."""
+    normalized_market = str(market or "").strip().lower()
+    if normalized_market not in {"spot", "futures"}:
+        return ["market must be spot or futures"]
+    errors: list[str] = []
+    symbol = str(raw_order.get("symbol") or raw_order.get("instId") or "").strip()
+    if not symbol:
+        errors.append("symbol is required")
+    side = str(raw_order.get("side") or "").strip().upper()
+    if side not in {"BUY", "SELL"}:
+        errors.append("side must be BUY or SELL")
+    order_type = str(raw_order.get("order_type") or raw_order.get("orderType") or raw_order.get("type") or "").strip().upper()
+    conditional = normalized_market == "futures" and order_type in {
+        "STOP",
+        "TAKE_PROFIT",
+        "STOP_MARKET",
+        "TAKE_PROFIT_MARKET",
+    }
+    if not order_type:
+        errors.append("type is required")
+    elif order_type not in {"LIMIT", "MARKET"} and not conditional:
+        errors.append("type must be LIMIT or MARKET")
+    if normalized_market == "futures":
+        position_side = str(raw_order.get("position_side") or raw_order.get("positionSide") or "").strip().upper()
+        if position_side not in {"LONG", "SHORT"}:
+            errors.append("positionSide must be LONG or SHORT")
+    quantity = raw_order.get("quantity")
+    if _positive_decimal(quantity, "quantity") is None:
+        errors.append("quantity must be greater than zero")
+    if conditional:
+        if _positive_decimal(raw_order.get("triggerPrice") or raw_order.get("trigger_price"), "triggerPrice") is None:
+            errors.append("triggerPrice must be greater than zero")
+        if order_type in {"STOP", "TAKE_PROFIT"} and _positive_decimal(raw_order.get("price"), "price") is None:
+            errors.append("price is required for conditional limit orders")
+        if str(raw_order.get("position_side") or raw_order.get("positionSide") or "").strip().upper() in {"LONG", "SHORT"}:
+            close_like = (
+                side == "SELL" and str(raw_order.get("position_side") or raw_order.get("positionSide")).strip().upper() == "LONG"
+            ) or (
+                side == "BUY" and str(raw_order.get("position_side") or raw_order.get("positionSide")).strip().upper() == "SHORT"
+            )
+            if close_like:
+                errors.append("price-threshold position closes must use preview-tp-sl")
+        working_type = str(raw_order.get("workingType") or raw_order.get("triggerPriceType") or "CONTRACT_PRICE").strip().upper()
+        if working_type not in {"CONTRACT_PRICE", "MARK_PRICE"}:
+            errors.append("workingType must be CONTRACT_PRICE or MARK_PRICE")
+    elif order_type == "LIMIT":
+        if _positive_decimal(raw_order.get("price"), "price") is None:
+            errors.append("price is required for LIMIT orders")
+        tif = str(raw_order.get("time_in_force") or raw_order.get("timeInForce") or "").strip().upper()
+        allowed_tif = {"GTC", "IOC", "FOK"} | ({"POST_ONLY"} if normalized_market == "futures" else set())
+        if tif not in allowed_tif:
+            errors.append("timeInForce is required for LIMIT orders")
+    elif order_type == "MARKET":
+        if raw_order.get("price") not in (None, ""):
+            errors.append("price must be omitted for MARKET orders")
+        if raw_order.get("time_in_force") not in (None, "") or raw_order.get("timeInForce") not in (None, ""):
+            errors.append("timeInForce must be omitted for MARKET orders")
+    for field in ("tpTriggerPrice", "slTriggerPrice", "tp_trigger_price", "sl_trigger_price"):
+        if raw_order.get(field) not in (None, "") and _positive_decimal(raw_order.get(field), field) is None:
+            errors.append(f"{field} must be greater than zero")
+    for field in ("TpWorkingType", "SlWorkingType", "tp_working_type", "sl_working_type"):
+        if raw_order.get(field) not in (None, "") and str(raw_order.get(field)).strip().upper() not in {"CONTRACT_PRICE", "MARK_PRICE"}:
+            errors.append(f"{field} must be CONTRACT_PRICE or MARK_PRICE")
+    return errors
+
+
+def _validate_product_rules(market: str, order: dict[str, Any], product_facts: dict[str, Any] | None) -> None:
+    if not isinstance(product_facts, dict):
+        raise AggregationInputError("official product rules are unavailable")
+    status = str(product_facts.get("status") or "").strip().upper()
+    if status and status != "TRADING":
+        raise AggregationInputError("symbol is not currently tradable")
+    if product_facts.get("enableTrade") is False:
+        raise AggregationInputError("symbol trading is disabled")
+    try:
+        quantity = Decimal(str(order.get("quantity")))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise AggregationInputError("quantity must be numeric") from exc
+    if not quantity.is_finite() or quantity <= 0:
+        raise AggregationInputError("quantity must be greater than zero")
+    minimum_raw = product_facts.get("minTradeAmount", product_facts.get("minOrderSize"))
+    maximum_raw = product_facts.get("maxTradeAmount", product_facts.get("maxOrderSize"))
+    try:
+        minimum = Decimal(str(minimum_raw))
+        maximum = Decimal(str(maximum_raw))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise AggregationInputError("official product quantity rules are invalid") from exc
+    if quantity < minimum:
+        raise AggregationInputError("quantity is below the official minimum")
+    if quantity > maximum:
+        raise AggregationInputError("quantity exceeds the official maximum")
+    step_raw = product_facts.get("stepSize")
+    if step_raw not in (None, ""):
+        try:
+            step = Decimal(str(step_raw))
+            if step <= 0 or quantity % step != 0:
+                raise AggregationInputError("quantity does not match the official step size")
+        except InvalidOperation as exc:
+            raise AggregationInputError("official product quantity rules are invalid") from exc
+    precision_raw = product_facts.get("quantityPrecision")
+    if precision_raw not in (None, ""):
+        try:
+            precision = int(precision_raw)
+        except (TypeError, ValueError) as exc:
+            raise AggregationInputError("official product quantity rules are invalid") from exc
+        if abs(quantity.as_tuple().exponent) > precision:
+            raise AggregationInputError("quantity exceeds the official precision")
+    for field in ("price", "triggerPrice", "trigger_price"):
+        value = order.get(field)
+        if value in (None, ""):
+            continue
+        tick_raw = product_facts.get("tickSize")
+        if tick_raw in (None, ""):
+            continue
+        try:
+            tick = Decimal(str(tick_raw))
+            price = Decimal(str(value))
+            if tick <= 0 or price % tick != 0:
+                raise AggregationInputError(f"{field} does not match the official tick size")
+        except InvalidOperation as exc:
+            raise AggregationInputError(f"{field} must be numeric") from exc
+
+
+def _preview_blocking_reasons(payload: dict[str, Any], analysis_output: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    payload_degraded = payload.get("degraded_reasons")
+    analysis_degraded = analysis_output.get("degraded_reasons")
+    all_degraded = [
+        str(item)
+        for values in (payload_degraded, analysis_degraded)
+        if isinstance(values, list)
+        for item in values
+        if str(item).strip()
+    ]
+    if not isinstance(payload_degraded, list):
+        reasons.append("risk degradation metadata is missing")
+    reasons.extend(item for item in all_degraded if item not in MANUAL_ADVISORY_DEGRADED_REASONS)
+    if payload.get("partial") is True and not all_degraded:
+        reasons.append("risk payload is incomplete")
+    if analysis_output.get("partial") is True and not all(
+        item in MANUAL_ADVISORY_DEGRADED_REASONS for item in all_degraded
+    ):
+        reasons.append("risk analysis output is partial")
+    constraints = payload.get("constraints")
+    if not isinstance(constraints, list):
+        reasons.append("risk constraint metadata is missing")
+    elif constraints:
+        reasons.extend(str(item.get("message") if isinstance(item, dict) else item) for item in constraints)
+    explicit = analysis_output.get("blocking_reasons")
+    if isinstance(explicit, list):
+        reasons.extend(str(item.get("message") if isinstance(item, dict) else item) for item in explicit)
+    return list(dict.fromkeys(item for item in reasons if item.strip()))
+
+
+def _validate_preview_completeness(payload: dict[str, Any], analysis_output: dict[str, Any]) -> None:
+    reasons = _preview_blocking_reasons(payload, analysis_output)
+    if reasons:
+        raise AggregationInputError("order preview unavailable or incomplete: " + "; ".join(reasons))
+
+
+def _confirmation_only_response(
+    *,
+    order_preview: dict[str, Any],
+    environment: dict[str, Any],
+    user_environment_prefix: str,
+) -> dict[str, Any]:
+    return {
+        "order_preview": order_preview,
+        "confirmation_required": True,
+        "trading_mode": environment.get("trading_mode"),
+        "environment": environment,
+        "user_environment_prefix": user_environment_prefix,
+    }
+
+
+def _internal_preview_context(
+    payload: dict[str, Any], order_preview: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Keep hard completeness metadata for safety without exposing risk analysis."""
+    binding_payload = {
+        key: payload.get(key)
+        for key in (
+            "account_snapshot",
+            "positions",
+            "recent_orders",
+            "open_orders",
+            "conditional_orders",
+            "market_snapshot",
+            "product_facts",
+            "tp_sl",
+            "partial",
+            "degraded_reasons",
+            "constraints",
+        )
+    }
+    serialized_binding = json.dumps(
+        binding_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "order_preview": order_preview or payload.get("order_preview", {}),
+        "alerts": [],
+        "partial": payload.get("partial", False),
+        "degraded_reasons": payload.get("degraded_reasons", []),
+        "constraints": payload.get("constraints", []),
+        # This digest is persisted only to bind confirmation to the fresh
+        # exchange facts; the underlying account/risk data is never returned
+        # in the conversational response.
+        "fact_binding": hashlib.sha256(serialized_binding).hexdigest(),
+    }
 
 
 def _parse_order_json(raw: str) -> dict[str, Any]:
@@ -489,6 +727,50 @@ def _state_operation_lock(state: Any):
     return candidate
 
 
+def _preflight_auto_authorization(
+    state: Any,
+    *,
+    strategy_id: str,
+    authorization_id: str,
+    now: Any = None,
+) -> dict[str, Any] | None:
+    """Check local authorization state before fetching any volatile exchange facts."""
+    reader = getattr(state, "list_authorizations", None)
+    if not callable(reader):
+        return None
+    try:
+        kwargs: dict[str, Any] = {"strategy_id": strategy_id}
+        if now is not None:
+            kwargs["now"] = now
+        authorizations = reader(**kwargs)
+    except (ValueError, StateConflictError):
+        return {
+            "code": "STATE_CONFLICT",
+            "message": "automated-trading authorization state is unavailable or inconsistent",
+        }
+    # Test/dry-run callers may inject a lightweight state collaborator that
+    # does not implement the read projection.  Defer to the authoritative
+    # atomic reservation check in that case.
+    if not isinstance(authorizations, list):
+        return None
+    matching = [
+        item
+        for item in authorizations
+        if isinstance(item, dict) and item.get("authorization_id") == authorization_id
+    ]
+    if len(matching) != 1:
+        return {
+            "code": "UNKNOWN_AUTHORIZATION",
+            "message": "authorization is not available for this strategy",
+        }
+    if str(matching[0].get("status") or "").upper() != "ACTIVE":
+        return {
+            "code": "AUTHORIZATION_NOT_ACTIVE",
+            "message": "authorization is not active; use manual confirmation",
+        }
+    return None
+
+
 def submit_authorized_order(
     *,
     state: Any,
@@ -684,6 +966,18 @@ def _submit_authorized_order_unlocked(
                     }
                 ],
             )
+
+    authorization_error = _preflight_auto_authorization(
+        state,
+        strategy_id=strategy_id,
+        authorization_id=authorization_id,
+        now=now,
+    )
+    if authorization_error is not None:
+        return _manual_fallback(
+            code=authorization_error["code"],
+            blocking_reasons=[authorization_error],
+        )
 
     request_fingerprint = _request_fingerprint(operation_key, orders)
     replay_reader = getattr(type(state), "get_submission_group_by_idempotency", None)
@@ -1237,6 +1531,13 @@ def _environment_for_mode(trading_mode: str, market: str) -> dict[str, Any]:
 def _environment_from_payload_or_mode(payload: dict[str, Any], trading_mode: str, market: str) -> dict[str, Any]:
     environment = payload.get("environment")
     if isinstance(environment, dict) and environment.get("trading_mode"):
+        expected = _environment_for_mode(trading_mode, market)
+        actual_mode = str(environment.get("trading_mode") or "").strip().lower()
+        actual_market = str(environment.get("market") or "").strip().lower()
+        if actual_mode != expected["trading_mode"] or actual_market != expected["market"]:
+            raise AggregationInputError("risk payload environment does not match requested trading mode or market")
+        if bool(environment.get("uses_real_funds")) != bool(expected["uses_real_funds"]):
+            raise AggregationInputError("risk payload environment has an inconsistent funds flag")
         return dict(environment)
     return _environment_for_mode(trading_mode, market)
 
@@ -1386,7 +1687,10 @@ def _is_full_position_tp_sl(order_preview: dict[str, Any]) -> bool:
 def _format_zh_order_summary(preview_context: dict[str, Any] | None) -> str:
     order_preview = (preview_context or {}).get("order_preview")
     if not isinstance(order_preview, dict) or not order_preview:
-        return "订单：详情请以上方风险预览为准。"
+        return "订单：详情请以上方订单预览为准。"
+    if order_preview.get("operation") == "cancel_order":
+        target = order_preview.get("order_id") or order_preview.get("client_oid") or "未返回"
+        return f"操作：撤销{_zh_market_label(order_preview.get('market'))}订单，标识 {target}。"
     symbol = _format_value(order_preview.get("symbol"))
     market = _zh_market_label(order_preview.get("market"))
     order_type = _zh_order_type_label(order_preview.get("order_type") or order_preview.get("orderType"))
@@ -1397,13 +1701,18 @@ def _format_zh_order_summary(preview_context: dict[str, Any] | None) -> str:
         quantity = _format_value(order_preview.get("quantity") or order_preview.get("size"))
     price = order_preview.get("price")
     price_text = "" if price in (None, "") else f"，价格 {_format_value(price)}"
-    return f"订单：{symbol} {market}，{order_type}{action}，数量 {quantity}{price_text}。"
+    trigger_price = order_preview.get("trigger_price") or order_preview.get("triggerPrice")
+    trigger_text = "" if trigger_price in (None, "") else f"，触发价 {_format_value(trigger_price)}"
+    return f"订单：{symbol} {market}，{order_type}{action}，数量 {quantity}{price_text}{trigger_text}。"
 
 
 def _format_en_order_summary(preview_context: dict[str, Any] | None) -> str:
     order_preview = (preview_context or {}).get("order_preview")
     if not isinstance(order_preview, dict) or not order_preview:
-        return "Order: see the risk preview above for details."
+        return "Order: see the order preview above for details."
+    if order_preview.get("operation") == "cancel_order":
+        target = order_preview.get("order_id") or order_preview.get("client_oid") or "not returned"
+        return f"Operation: cancel the {str(order_preview.get('market') or '').lower()} order identified by {target}."
     symbol = _format_value(order_preview.get("symbol"), missing="not returned")
     market = _en_market_label(order_preview.get("market"))
     order_type = _en_order_type_label(order_preview.get("order_type") or order_preview.get("orderType"))
@@ -1414,95 +1723,9 @@ def _format_en_order_summary(preview_context: dict[str, Any] | None) -> str:
         quantity = _format_value(order_preview.get("quantity") or order_preview.get("size"), missing="not returned")
     price = order_preview.get("price")
     price_text = "" if price in (None, "") else f", price {_format_value(price, missing='not returned')}"
-    return f"Order: {symbol} {market}, {order_type} {action}, quantity {quantity}{price_text}."
-
-
-def _alert_level_is_high(alert: dict[str, Any]) -> bool:
-    return str(alert.get("level") or "").strip().lower() == "high" or alert.get("type") == "missing_tp_sl"
-
-
-def _alert_reason_zh(alert: dict[str, Any]) -> str:
-    alert_type = alert.get("type")
-    if alert_type == "missing_tp_sl":
-        return "这笔订单没有止盈或止损保护，需要你明确接受无保护仓位风险后才能继续。"
-    if alert_type in {"high_trade_frequency", "frequent_trading"}:
-        return "近期交易频率偏高，请暂停并确认这次入场仍满足交易条件。"
-    if alert_type == "high_leverage_or_concentration":
-        return "当前杠杆或集中度已经偏高，确认前应降低杠杆、减小仓位或分散风险。"
-    reason = str(alert.get("reason") or alert.get("suggestion") or alert.get("type") or "请先复核上方风险提示。").strip()
-    if reason[-1:] not in "。！？.!?":
-        reason += "。"
-    return reason
-
-
-def _alert_reason_en(alert: dict[str, Any]) -> str:
-    alert_type = alert.get("type")
-    if alert_type == "missing_tp_sl":
-        return "The order has no take-profit or stop-loss protection. Continue only if you explicitly accept an unprotected position."
-    if alert_type in {"high_trade_frequency", "frequent_trading"}:
-        return "Recent trading frequency is high. Pause and confirm this setup still meets the entry criteria."
-    if alert_type == "high_leverage_or_concentration":
-        return "Current leverage or resulting concentration is already elevated. Lower leverage, reduce size, or diversify exposure before confirming."
-    reason = str(alert.get("reason") or alert.get("suggestion") or alert.get("type") or "Review the risk alert above before continuing.").strip()
-    if reason[-1:] not in ".!?。！？":
-        reason += "."
-    return reason
-
-
-def _alert_label_zh(alert: dict[str, Any]) -> str:
-    labels = {
-        "missing_tp_sl": "缺少止盈止损",
-        "high_trade_frequency": "频繁交易",
-        "frequent_trading": "频繁交易",
-        "high_leverage_or_concentration": "高杠杆或集中度",
-        "low_free_balance": "可用余额偏低",
-        "oversized_position": "仓位偏大",
-        "limit_price_too_far": "限价偏离",
-    }
-    return labels.get(str(alert.get("type") or ""), "风险提示")
-
-
-def _alert_label_en(alert: dict[str, Any]) -> str:
-    labels = {
-        "missing_tp_sl": "Missing TP/SL",
-        "high_trade_frequency": "Frequent trading",
-        "frequent_trading": "Frequent trading",
-        "high_leverage_or_concentration": "High leverage or concentration",
-        "low_free_balance": "Low free balance",
-        "oversized_position": "Oversized position",
-        "limit_price_too_far": "Limit price deviation",
-    }
-    return labels.get(str(alert.get("type") or ""), "Risk alert")
-
-
-def _format_zh_alert_summary(preview_context: dict[str, Any] | None) -> str:
-    alerts = [alert for alert in (preview_context or {}).get("alerts", []) if isinstance(alert, dict)]
-    if not alerts:
-        return "风险提示：未发现高风险提示。"
-    alert = next((candidate for candidate in alerts if _alert_level_is_high(candidate)), alerts[0])
-    prefix = "高风险提示" if _alert_level_is_high(alert) else "风险提示"
-    lines = [f"{prefix}：{_alert_reason_zh(alert)}"]
-    remaining_alerts = [candidate for candidate in alerts if candidate is not alert]
-    if remaining_alerts:
-        lines.append("其他风险提示：")
-        for candidate in remaining_alerts:
-            lines.append(f"- {_alert_label_zh(candidate)}：{_alert_reason_zh(candidate)}")
-    return "\n".join(lines)
-
-
-def _format_en_alert_summary(preview_context: dict[str, Any] | None) -> str:
-    alerts = [alert for alert in (preview_context or {}).get("alerts", []) if isinstance(alert, dict)]
-    if not alerts:
-        return "Risk alert: no high-risk alerts were detected."
-    alert = next((candidate for candidate in alerts if _alert_level_is_high(candidate)), alerts[0])
-    prefix = "High-risk alert" if _alert_level_is_high(alert) else "Risk alert"
-    lines = [f"{prefix}: {_alert_reason_en(alert)}"]
-    remaining_alerts = [candidate for candidate in alerts if candidate is not alert]
-    if remaining_alerts:
-        lines.append("Other risk alerts:")
-        for candidate in remaining_alerts:
-            lines.append(f"- {_alert_label_en(candidate)}: {_alert_reason_en(candidate)}")
-    return "\n".join(lines)
+    trigger_price = order_preview.get("trigger_price") or order_preview.get("triggerPrice")
+    trigger_text = "" if trigger_price in (None, "") else f", trigger price {_format_value(trigger_price, missing='not returned')}"
+    return f"Order: {symbol} {market}, {order_type} {action}, quantity {quantity}{price_text}{trigger_text}."
 
 
 def _build_zh_confirmation_instruction(
@@ -1525,10 +1748,9 @@ def _build_zh_confirmation_instruction(
         f"当前交易环境：{mode}",
         funds_line,
         "",
-        f"{mode}风险预览已生成，订单尚未提交。",
+        f"{mode}订单预览已生成，订单尚未提交。",
         "",
         _format_zh_order_summary(preview_context),
-        _format_zh_alert_summary(preview_context),
         "",
         confirm_line,
     ]
@@ -1553,7 +1775,7 @@ def _build_en_confirmation_instruction(
     mode = _confirmation_environment_label(environment, language="en")
     uses_real_funds = bool(environment.get("uses_real_funds"))
     funds_line = "This operation uses real funds. Confirm carefully." if uses_real_funds else "This operation does not use real funds."
-    preview_line = f"{mode.capitalize()} risk preview generated; order has not been submitted."
+    preview_line = f"{mode.capitalize()} order preview generated; order has not been submitted."
     confirm_line = (
         f"To submit this order with real funds, reply: {reply_text}"
         if uses_real_funds
@@ -1566,7 +1788,6 @@ def _build_en_confirmation_instruction(
         preview_line,
         "",
         _format_en_order_summary(preview_context),
-        _format_en_alert_summary(preview_context),
         "",
         confirm_line,
     ]
@@ -1643,7 +1864,11 @@ def _positive_decimal_text(payload: dict[str, Any], key: str) -> str:
 
 
 def _normalize_tp_sl_order(raw_order: dict[str, Any]) -> dict[str, str]:
-    client_algo_id = _required_text(raw_order, "clientAlgoId")
+    client_algo_id = str(raw_order.get("clientAlgoId") or raw_order.get("client_algo_id") or "").strip()
+    if not client_algo_id:
+        import weex_contract_api as contract_api
+
+        client_algo_id = contract_api.generate_client_oid()
     if len(client_algo_id) > 36 or re.fullmatch(r"[\.\:\/A-Za-z0-9_-]{1,36}", client_algo_id) is None:
         raise AggregationInputError("clientAlgoId must be 1-36 allowed characters")
 
@@ -1659,12 +1884,21 @@ def _normalize_tp_sl_order(raw_order: dict[str, Any]) -> dict[str, str]:
     if trigger_price_type not in {"CONTRACT_PRICE", "MARK_PRICE"}:
         raise AggregationInputError("triggerPriceType must be CONTRACT_PRICE or MARK_PRICE")
 
+    execute_price_raw = raw_order.get("executePrice", "0")
+    execute_price = str(execute_price_raw).strip() or "0"
+    try:
+        execute_decimal = Decimal(execute_price)
+    except (InvalidOperation, ValueError) as exc:
+        raise AggregationInputError("executePrice must be numeric") from exc
+    if not execute_decimal.is_finite() or execute_decimal < 0:
+        raise AggregationInputError("executePrice must be greater than or equal to zero")
+
     normalized = {
         "symbol": _required_text(raw_order, "symbol").upper(),
         "clientAlgoId": client_algo_id,
         "planType": plan_type,
         "triggerPrice": _positive_decimal_text(raw_order, "triggerPrice"),
-        "executePrice": str(raw_order.get("executePrice", "0")).strip() or "0",
+        "executePrice": execute_price,
         "positionSide": position_side,
         "triggerPriceType": trigger_price_type,
     }
@@ -1679,6 +1913,52 @@ def _normalize_tp_sl_order(raw_order: dict[str, Any]) -> dict[str, str]:
             raise AggregationInputError("quantity must be >= 0")
         normalized["quantity"] = quantity_text
     return normalized
+
+
+def _validate_tp_sl_against_account(
+    tp_sl_order: dict[str, str], account_payload: dict[str, Any]
+) -> None:
+    positions = account_payload.get("positions")
+    if not isinstance(positions, list):
+        raise AggregationInputError("fresh account positions are unavailable for TP/SL")
+    symbol = str(tp_sl_order.get("symbol") or "").strip().upper()
+    position_side = str(tp_sl_order.get("positionSide") or "").strip().upper()
+    matches: list[dict[str, Any]] = []
+    for item in positions:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("symbol") or "").strip().upper() != symbol:
+            continue
+        if str(item.get("position_side") or item.get("positionSide") or item.get("side") or "").strip().upper() != position_side:
+            continue
+        try:
+            quantity = Decimal(str(item.get("quantity") or "0"))
+        except (InvalidOperation, ValueError):
+            continue
+        if quantity > 0:
+            matches.append(item)
+    if len(matches) != 1:
+        raise AggregationInputError("matching open position is required for TP/SL")
+    position_quantity = Decimal(str(matches[0].get("quantity") or "0"))
+    requested_quantity = Decimal(str(tp_sl_order.get("quantity") or "0"))
+    if requested_quantity > 0 and requested_quantity > position_quantity:
+        raise AggregationInputError("TP/SL quantity cannot exceed the open position quantity")
+    market_snapshot = account_payload.get("market_snapshot")
+    current_price = market_snapshot.get("current_price") if isinstance(market_snapshot, dict) else None
+    try:
+        current_decimal = Decimal(str(current_price))
+        trigger_decimal = Decimal(str(tp_sl_order["triggerPrice"]))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise AggregationInputError("current market price is unavailable for TP/SL direction validation") from exc
+    if not current_decimal.is_finite() or current_decimal <= 0:
+        raise AggregationInputError("current market price is unavailable for TP/SL direction validation")
+    plan_type = tp_sl_order["planType"]
+    if position_side == "LONG":
+        valid_direction = trigger_decimal > current_decimal if plan_type == "TAKE_PROFIT" else trigger_decimal < current_decimal
+    else:
+        valid_direction = trigger_decimal < current_decimal if plan_type == "TAKE_PROFIT" else trigger_decimal > current_decimal
+    if not valid_direction:
+        raise AggregationInputError("TP/SL trigger price is inconsistent with position direction and current price")
 
 
 def _build_contract_client(profile_name: str | None) -> tuple[Any, Any]:
@@ -1696,11 +1976,6 @@ def _build_contract_client(profile_name: str | None) -> tuple[Any, Any]:
                 "Invalid runtime environment:\n"
                 + "\n".join(f"- {issue}" for issue in environment_validation["issues"])
             )
-    elif profile_name is None:
-        raise SystemExit(
-            "Trader preview and confirmation require WEEX_API_KEY, WEEX_API_SECRET, and WEEX_API_PASSPHRASE "
-            "when --profile is omitted. Set all three together or pass --profile <name>."
-        )
     else:
         contract_api.ensure_private_runtime_ready(command="trade-guard.contract", auto_setup=True, language=None)
         profile = contract_api.resolve_runtime_profile(requested_profile=profile_name, allow_invalid_default=False)
@@ -1740,11 +2015,6 @@ def _build_spot_client(profile_name: str | None) -> tuple[Any, Any]:
                 "Invalid runtime environment:\n"
                 + "\n".join(f"- {issue}" for issue in environment_validation["issues"])
             )
-    elif profile_name is None:
-        raise SystemExit(
-            "Trader preview and confirmation require WEEX_API_KEY, WEEX_API_SECRET, and WEEX_API_PASSPHRASE "
-            "when --profile is omitted. Set all three together or pass --profile <name>."
-        )
     else:
         spot_api.ensure_private_runtime_ready(command="trade-guard.spot", auto_setup=True, language=None)
         profile = spot_api.resolve_runtime_profile(requested_profile=profile_name, allow_invalid_default=False)
@@ -1844,6 +2114,33 @@ def _validate_exact_position_close(
     return numeric_position_id
 
 
+def _exchange_business_error(data: Any) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    if data.get("success") is False:
+        return str(data.get("msg") or data.get("message") or "exchange rejected the request")
+    error_code = data.get("errorCode")
+    if error_code not in (None, "", 0, "0", "00000"):
+        return str(data.get("errorMessage") or data.get("msg") or error_code)
+    code = data.get("code")
+    if code not in (None, "", 0, "0", "00000", "SUCCESS"):
+        return str(data.get("msg") or data.get("message") or code)
+    return None
+
+
+def _require_exchange_success(response: dict[str, Any], *, mode: str, operation: str) -> Any:
+    if not response.get("ok"):
+        if response.get("status") is None:
+            raise SubmissionUncertainError(
+                f"{operation} result is uncertain; inspect the exchange before retrying"
+            )
+        raise AggregationInputError(f"{mode} {operation} failed: {response.get('error')}")
+    business_error = _exchange_business_error(response.get("data"))
+    if business_error:
+        raise AggregationInputError(f"{mode} {operation} rejected: {business_error}")
+    return response.get("data")
+
+
 def _submit_order(
     *,
     market: str,
@@ -1855,6 +2152,9 @@ def _submit_order(
     mode = _normalize_trading_mode(trading_mode)
     if mode == "demo" and normalized_market != "futures":
         raise AggregationInputError("demo_spot_unsupported: demo order submission is only supported for futures")
+    validation_errors = validate_manual_order(normalized_market, raw_order)
+    if validation_errors:
+        raise AggregationInputError("; ".join(validation_errors))
     if normalized_market == "futures":
         position_side = raw_order.get("position_side") or raw_order.get("positionSide")
         order_type = raw_order.get("order_type") or raw_order.get("type")
@@ -1866,7 +2166,7 @@ def _submit_order(
         if requested_position_id is not None:
             if mode != "live":
                 raise AggregationInputError("exact position close is only supported for live futures")
-            fresh_account = TradeDataAggregator().collect_account_risk_payload(
+            fresh_account = TradeDataAggregator().collect_account_facts_payload(
                 profile_name=profile_name,
                 market="futures",
                 trading_mode=mode,
@@ -1877,7 +2177,7 @@ def _submit_order(
             endpoint_key = contract_api.find_endpoint_key_by_doc_suffix("ClosePositions")
             normalized_symbol = contract_api.normalize_contract_trade_symbol(str(raw_order["symbol"]))
             body = {"symbol": normalized_symbol, "positionId": position_id}
-            _, payload = contract_api.execute_endpoint_payload(
+            code, payload = contract_api.execute_endpoint_payload(
                 client=client,
                 endpoint_key=endpoint_key,
                 query={},
@@ -1887,39 +2187,69 @@ def _submit_order(
                 trading_mode=mode,
                 pretty=False,
             )
-            return payload
+            if payload.get("status") is None and code != 0:
+                raise SubmissionUncertainError("exact position close result is uncertain; inspect the exchange before retrying")
+            if code != 0 or not payload.get("ok") or _exchange_business_error(payload.get("result")):
+                raise AggregationInputError(f"{mode} exact position close failed: {payload.get('result')}")
+            data = payload.get("result")
+            return data if isinstance(data, dict) else {"result": data}
         contract_api, client = _build_contract_client(profile_name)
-        endpoint_key = (
-            "sim.transaction.place_order"
-            if mode == "demo"
-            else "transaction.place_order"
-        )
-        endpoint = contract_api.ENDPOINTS[endpoint_key]
-        normalized_symbol = (
-            contract_api.normalize_contract_demo_trade_symbol(str(raw_order["symbol"]))
-            if mode == "demo"
-            else contract_api.normalize_contract_trade_symbol(str(raw_order["symbol"]))
-        )
-        body = {
-            "symbol": normalized_symbol,
-            "side": str(raw_order["side"]).upper(),
-            "positionSide": str(position_side).upper(),
-            "type": str(order_type).upper(),
-            "quantity": raw_order["quantity"],
-            "price": raw_order.get("price"),
-            "timeInForce": raw_order.get("time_in_force") or raw_order.get("timeInForce"),
-            "newClientOrderId": raw_order.get("new_client_order_id")
-            or raw_order.get("newClientOrderId")
-            or contract_api.generate_client_oid(),
-            "tpTriggerPrice": raw_order.get("tp_trigger_price") or raw_order.get("tpTriggerPrice"),
-            "slTriggerPrice": raw_order.get("sl_trigger_price") or raw_order.get("slTriggerPrice"),
-            "TpWorkingType": raw_order.get("tp_working_type") or raw_order.get("TpWorkingType"),
-            "SlWorkingType": raw_order.get("sl_working_type") or raw_order.get("SlWorkingType"),
-        }
-        body = {key: value for key, value in body.items() if value not in (None, "")}
-        contract_api.validate_endpoint_trading_mode(endpoint, mode)
-        prepared = client.prepare_request(endpoint, query={}, body=body)
-        response = client.send(prepared)
+        normalized_order_type = str(order_type).strip().upper()
+        if normalized_order_type in {"STOP", "TAKE_PROFIT", "STOP_MARKET", "TAKE_PROFIT_MARKET"}:
+            if mode != "live":
+                raise AggregationInputError("demo_conditional_order_unsupported: official demo conditional orders are unavailable")
+            endpoint_key = "transaction.place_pending_order"
+            endpoint = contract_api.ENDPOINTS[endpoint_key]
+            client_algo_id = str(raw_order.get("clientAlgoId") or raw_order.get("client_algo_id") or "").strip()
+            if not client_algo_id:
+                client_algo_id = contract_api.generate_client_oid()
+            body = {
+                "symbol": contract_api.normalize_contract_trade_symbol(str(raw_order["symbol"])),
+                "side": str(raw_order["side"]).upper(),
+                "positionSide": str(position_side).upper(),
+                "type": normalized_order_type,
+                "quantity": raw_order["quantity"],
+                "triggerPrice": raw_order.get("triggerPrice") or raw_order.get("trigger_price"),
+                "clientAlgoId": client_algo_id,
+                "price": raw_order.get("price"),
+                "TpWorkingType": raw_order.get("workingType") or raw_order.get("TpWorkingType"),
+                "SlWorkingType": raw_order.get("workingType") or raw_order.get("SlWorkingType"),
+            }
+            body = {key: value for key, value in body.items() if value not in (None, "")}
+            prepared = client.prepare_request(endpoint, query={}, body=body)
+            response = client.send(prepared)
+        else:
+            endpoint_key = (
+                "sim.transaction.place_order"
+                if mode == "demo"
+                else "transaction.place_order"
+            )
+            endpoint = contract_api.ENDPOINTS[endpoint_key]
+            normalized_symbol = (
+                contract_api.normalize_contract_demo_trade_symbol(str(raw_order["symbol"]))
+                if mode == "demo"
+                else contract_api.normalize_contract_trade_symbol(str(raw_order["symbol"]))
+            )
+            body: dict[str, Any] = {
+                "symbol": normalized_symbol,
+                "side": str(raw_order["side"]).upper(),
+                "positionSide": str(position_side).upper(),
+                "type": normalized_order_type,
+                "quantity": raw_order["quantity"],
+                "price": raw_order.get("price"),
+                "timeInForce": raw_order.get("time_in_force") or raw_order.get("timeInForce"),
+                "newClientOrderId": raw_order.get("new_client_order_id")
+                or raw_order.get("newClientOrderId")
+                or contract_api.generate_client_oid(),
+                "tpTriggerPrice": raw_order.get("tp_trigger_price") or raw_order.get("tpTriggerPrice"),
+                "slTriggerPrice": raw_order.get("sl_trigger_price") or raw_order.get("slTriggerPrice"),
+                "TpWorkingType": raw_order.get("tp_working_type") or raw_order.get("TpWorkingType"),
+                "SlWorkingType": raw_order.get("sl_working_type") or raw_order.get("SlWorkingType"),
+            }
+            body = {key: value for key, value in body.items() if value not in (None, "")}
+            contract_api.validate_endpoint_trading_mode(endpoint, mode)
+            prepared = client.prepare_request(endpoint, query={}, body=body)
+            response = client.send(prepared)
     elif normalized_market == "spot":
         if mode != "live":
             raise AggregationInputError("demo_spot_unsupported: demo order submission is only supported for futures")
@@ -1945,9 +2275,8 @@ def _submit_order(
     else:
         raise AggregationInputError(f"Unsupported market for live order submission: {market}")
 
-    if not response.get("ok"):
-        raise AggregationInputError(f"{mode} order submission failed: {response.get('error')}")
-    return response.get("data") if isinstance(response.get("data"), dict) else {"result": response.get("data")}
+    data = _require_exchange_success(response, mode=mode, operation="order submission")
+    return data if isinstance(data, dict) else {"result": data}
 
 
 def _submit_live_order(*, market: str, profile_name: str | None, raw_order: dict[str, Any]) -> dict[str, Any]:
@@ -2048,14 +2377,29 @@ def _submit_live_tp_sl_order(*, profile_name: str | None, raw_order: dict[str, A
     normalized["symbol"] = contract_api.normalize_contract_trade_symbol(normalized["symbol"])
     prepared = client.prepare_request(endpoint, query={}, body=normalized)
     response = client.send(prepared)
-    if not response.get("ok"):
-        raise AggregationInputError(f"Live TP/SL submission failed: {response.get('error')}")
-    return response.get("data") if isinstance(response.get("data"), dict) else {"result": response.get("data")}
+    data = _require_exchange_success(response, mode="live", operation="TP/SL submission")
+    return data if isinstance(data, dict) else {"result": data}
 
 
 def cmd_preview_order(args: argparse.Namespace, *, now_ms: int | None = None) -> int:
     raw_order = _parse_order_json(args.order_json)
     trading_mode = _normalize_trading_mode(_arg_value(args, "trading_mode", DEFAULT_TRADING_MODE))
+    validation_errors = validate_manual_order(args.market, raw_order)
+    if validation_errors:
+        _output_json(
+            {
+                "ok": False,
+                "error": "order parameters are incomplete or invalid",
+                "missing_or_invalid_fields": validation_errors,
+                "next_action": "ASK_FOR_MISSING_OR_INVALID_ORDER_FIELDS",
+            },
+            args.pretty,
+        )
+        return 1
+    order_type = str(raw_order.get("order_type") or raw_order.get("orderType") or raw_order.get("type") or "").strip().upper()
+    if trading_mode == "demo" and order_type in {"STOP", "TAKE_PROFIT", "STOP_MARKET", "TAKE_PROFIT_MARKET"}:
+        _output_error("demo_conditional_order_unsupported: official demo conditional orders are unavailable", args.pretty)
+        return 1
     trade_aggregator = TradeDataAggregator()
     risk_payload = trade_aggregator.collect_order_risk_payload(
         profile_name=args.profile,
@@ -2063,11 +2407,12 @@ def cmd_preview_order(args: argparse.Namespace, *, now_ms: int | None = None) ->
         trading_mode=trading_mode,
         raw_order=raw_order,
     )
+    _validate_product_rules(args.market, raw_order, risk_payload.get("product_facts"))
     raw_order = _ensure_client_order_id(args.market, raw_order)
     if _position_identity(raw_order, "position_id", "positionId") is not None:
         _validate_exact_position_close(raw_order, risk_payload)
     environment = _environment_from_payload_or_mode(risk_payload, trading_mode, args.market)
-    analysis_output = analysis.analyze_order_risk(risk_payload)
+    analysis_output = _internal_preview_context(risk_payload)
     analysis_output = _merge_environment_context(
         analysis_output,
         trading_mode=trading_mode,
@@ -2077,7 +2422,9 @@ def cmd_preview_order(args: argparse.Namespace, *, now_ms: int | None = None) ->
         environment,
         language=_arg_value(args, "language", None),
     )
+    _validate_preview_completeness(risk_payload, analysis_output)
     current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    confirmation_language = resolve_language(_arg_value(args, "language", None))
     intent = build_intent(
         profile_name=args.profile,
         market=args.market,
@@ -2088,9 +2435,16 @@ def cmd_preview_order(args: argparse.Namespace, *, now_ms: int | None = None) ->
         analysis_output=analysis_output,
         now_ms=current_ms,
         ttl_seconds=args.ttl_seconds,
+        confirmation_reply_text=CONFIRMATION_PROMPTS[confirmation_language]["reply_text"],
+        confirmation_language=confirmation_language,
+        freshness_required=True,
     )
     save_intent(intent)
-    response = dict(analysis_output)
+    response = _confirmation_only_response(
+        order_preview=analysis_output.get("order_preview") or risk_payload.get("order_preview", {}),
+        environment=environment,
+        user_environment_prefix=analysis_output["user_environment_prefix"],
+    )
     response["intent_id"] = intent["intent_id"]
     response["expires_at"] = intent["expires_at"]
     response["risk_signature"] = intent["risk_signature"]
@@ -2114,14 +2468,17 @@ def cmd_preview_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
         return 1
     tp_sl_order = _normalize_tp_sl_order(_parse_tp_sl_json(args.tp_sl_json))
     trade_aggregator = TradeDataAggregator()
-    risk_payload = trade_aggregator.collect_account_risk_payload(
+    risk_payload = trade_aggregator.collect_account_facts_payload(
         profile_name=args.profile,
         market="futures",
         trading_mode=trading_mode,
         symbol=tp_sl_order["symbol"],
     )
+    if tp_sl_order.get("quantity") not in (None, "", "0"):
+        _validate_product_rules("futures", tp_sl_order, risk_payload.get("product_facts"))
+    _validate_tp_sl_against_account(tp_sl_order, risk_payload)
     environment = _environment_from_payload_or_mode(risk_payload, trading_mode, "futures")
-    analysis_output = analysis.analyze_account_risk(risk_payload)
+    analysis_output = _internal_preview_context(risk_payload, tp_sl_order)
     analysis_output = _merge_environment_context(
         analysis_output,
         trading_mode=trading_mode,
@@ -2131,7 +2488,9 @@ def cmd_preview_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
         environment,
         language=_arg_value(args, "language", None),
     )
+    _validate_preview_completeness(risk_payload, analysis_output)
     current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    confirmation_language = resolve_language(_arg_value(args, "language", None))
     intent = build_intent(
         profile_name=args.profile,
         market="futures",
@@ -2144,9 +2503,29 @@ def cmd_preview_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
         ttl_seconds=args.ttl_seconds,
         intent_type="tp_sl_order",
         tp_sl_order=tp_sl_order,
+        confirmation_reply_text=CONFIRMATION_PROMPTS[confirmation_language]["reply_text"],
+        confirmation_language=confirmation_language,
+        freshness_required=True,
     )
     save_intent(intent)
-    response = dict(analysis_output)
+    tp_sl_preview_context = {
+        **analysis_output,
+        "order_preview": {
+            "market": "futures",
+            "symbol": tp_sl_order["symbol"],
+            "side": "SELL" if tp_sl_order["positionSide"] == "LONG" else "BUY",
+            "position_side": tp_sl_order["positionSide"],
+            "order_type": tp_sl_order["planType"],
+            "quantity": tp_sl_order.get("quantity"),
+            "price": tp_sl_order.get("executePrice"),
+            "trigger_price": tp_sl_order.get("triggerPrice"),
+        },
+    }
+    response = _confirmation_only_response(
+        order_preview=tp_sl_preview_context["order_preview"],
+        environment=environment,
+        user_environment_prefix=analysis_output["user_environment_prefix"],
+    )
     response["intent_type"] = "tp_sl_order"
     response["tp_sl_order"] = tp_sl_order
     response["intent_id"] = intent["intent_id"]
@@ -2155,6 +2534,7 @@ def cmd_preview_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
     response["user_confirmation"] = _build_user_confirmation(
         _arg_value(args, "language", None),
         environment=environment,
+        preview_context=tp_sl_preview_context,
     )
     _output_json(response, args.pretty)
     return 0
@@ -2170,16 +2550,225 @@ def _confirm_flags_match_mode(args: argparse.Namespace, trading_mode: str) -> bo
     return confirm_live and not confirm_demo
 
 
+def _mark_intent_review_required(intent: dict[str, Any], error: str) -> None:
+    intent["submission_status"] = "REVIEW_REQUIRED"
+    intent["submission_error"] = str(error)
+    try:
+        save_intent(intent)
+    except OSError:
+        pass
+
+
+def _expected_confirmation_text(intent: dict[str, Any], args: argparse.Namespace) -> str:
+    stored = intent.get("confirmation_reply_text")
+    if isinstance(stored, str) and stored:
+        return stored
+    language = str(intent.get("confirmation_language") or _arg_value(args, "language", None) or "zh")
+    resolved = resolve_language(language)
+    return CONFIRMATION_PROMPTS[resolved]["reply_text"]
+
+
+def _revalidate_intent_facts(intent: dict[str, Any]) -> None:
+    """Re-fetch facts and reject an intent when its risk context changed."""
+    if intent.get("freshness_required") is not True:
+        analysis_output = intent.get("analysis_output")
+        if isinstance(analysis_output, dict) and any(
+            key in analysis_output for key in ("partial", "degraded_reasons", "constraints")
+        ):
+            _validate_preview_completeness(analysis_output, analysis_output)
+        return
+    raw_order = intent.get("raw_order")
+    market = str(intent.get("market") or "").strip().lower()
+    mode = _normalize_trading_mode(intent.get("trading_mode", DEFAULT_TRADING_MODE))
+    if not isinstance(raw_order, dict) or market not in {"spot", "futures"}:
+        raise AggregationInputError("pending intent is missing a valid order context")
+    fresh_payload = TradeDataAggregator().collect_order_risk_payload(
+        profile_name=intent.get("profile_name"),
+        market=market,
+        trading_mode=mode,
+        raw_order=raw_order,
+    )
+    _validate_product_rules(market, raw_order, fresh_payload.get("product_facts"))
+    fresh_analysis = _internal_preview_context(fresh_payload)
+    environment = _environment_from_payload_or_mode(fresh_payload, mode, market)
+    fresh_analysis = _merge_environment_context(
+        fresh_analysis,
+        trading_mode=mode,
+        environment=environment,
+    )
+    fresh_analysis["user_environment_prefix"] = _query_environment_prefix(
+        environment,
+        language=intent.get("confirmation_language"),
+    )
+    _validate_preview_completeness(fresh_payload, fresh_analysis)
+    expected_environment = intent.get("environment")
+    if isinstance(expected_environment, dict) and expected_environment != environment:
+        raise AggregationInputError("risk environment changed; generate a new preview first")
+    fresh_signature = build_risk_signature(
+        profile_name=intent.get("profile_name"),
+        market=market,
+        trading_mode=mode,
+        order_preview=fresh_analysis.get("order_preview") or fresh_payload.get("order_preview", {}),
+        raw_order=raw_order,
+        analysis_output=fresh_analysis,
+        intent_type=str(intent.get("intent_type") or "order"),
+        environment=environment,
+        tp_sl_order=intent.get("tp_sl_order"),
+        intent_id=str(intent.get("intent_id") or ""),
+        created_at=intent.get("created_at"),
+        expires_at=intent.get("expires_at"),
+        ttl_seconds=intent.get("ttl_seconds"),
+        confirmation_reply_text=intent.get("confirmation_reply_text"),
+        confirmation_language=intent.get("confirmation_language"),
+        freshness_required=intent.get("freshness_required"),
+    )
+    if not hmac.compare_digest(str(intent.get("risk_signature") or ""), fresh_signature):
+        raise AggregationInputError("risk facts changed since preview; generate a new preview first")
+
+
+def _revalidate_auto_fallback_intent(intent: dict[str, Any]) -> None:
+    """Re-run the internal automatic-order guards before a manual fallback write.
+
+    A fallback intent is intentionally not an automatic authorization grant, but
+    it still carries an official operation shape.  Before the user confirms it,
+    refresh the same account/product/fact checks used by automatic submission so
+    a stale fallback cannot bypass the Trader safety boundary.
+    """
+    operation_key = str(intent.get("auto_fallback_operation_key") or "").strip()
+    operation = resolve_official_auto_trade_operation(operation_key)
+    orders = intent.get("auto_fallback_orders")
+    if operation is None or not isinstance(orders, list) or not orders:
+        raise AggregationInputError("automatic fallback intent is invalid; generate a new preview first")
+    if len(orders) > operation["max_legs"] or (
+        operation["kind"] != "BATCH" and len(orders) != 1
+    ):
+        raise AggregationInputError("automatic fallback order count changed; generate a new preview first")
+    if any(not isinstance(item, dict) for item in orders):
+        raise AggregationInputError("automatic fallback order is invalid; generate a new preview first")
+
+    from weex_auto_trade_runtime import OfficialAutoTradeRuntime
+
+    runtime = OfficialAutoTradeRuntime(profile_name=str(intent.get("profile_name") or ""))
+    for index, raw_order in enumerate(orders):
+        if operation["kind"] == "CONDITIONAL":
+            leg_type = "CONDITIONAL"
+        elif operation["kind"] == "TP_SL":
+            leg_type = str(raw_order.get("planType") or "").upper()
+        else:
+            leg_type = "PRIMARY" if len(orders) == 1 else "BATCH_CHILD"
+        leg = {
+            "leg_id": f"leg-{index}",
+            "leg_index": index,
+            "leg_type": leg_type,
+            "module": operation["module"],
+            "order": dict(raw_order),
+        }
+        try:
+            payload = runtime.risk_payload_provider(leg)
+            if not isinstance(payload, dict):
+                raise ValueError("risk facts are unavailable")
+            if raw_order.get("quantity") not in (None, ""):
+                _validate_product_rules(
+                    str(operation["module"]).lower(),
+                    raw_order,
+                    payload.get("product_facts"),
+                )
+            evaluated = runtime.risk_evaluator(payload)
+            if not isinstance(evaluated, dict):
+                raise ValueError("risk facts are unavailable")
+            reasons = _blocking_reasons_from_risk_payload(payload, evaluated)
+            if reasons:
+                raise ValueError("official facts changed or are incomplete")
+            facts = runtime.facts_provider(leg)
+            if not isinstance(facts, dict):
+                raise ValueError("official facts are unavailable")
+            if operation["module"] == "SPOT":
+                quantity_reason = _spot_quantity_blocking_reason(
+                    facts,
+                    raw_order.get("quantity"),
+                )
+                if quantity_reason is not None:
+                    raise ValueError(quantity_reason["message"])
+        except Exception as exc:
+            raise AggregationInputError(
+                "automatic fallback facts changed or are unavailable; generate a new preview first"
+            ) from exc
+
+
+def _revalidate_tp_sl_intent(intent: dict[str, Any]) -> None:
+    if intent.get("freshness_required") is not True:
+        return
+    tp_sl_order = intent.get("tp_sl_order")
+    if not isinstance(tp_sl_order, dict):
+        raise AggregationInputError("pending TP/SL intent is missing its order context")
+    fresh_payload = TradeDataAggregator().collect_account_facts_payload(
+        profile_name=intent.get("profile_name"),
+        market="futures",
+        trading_mode="live",
+        symbol=str(tp_sl_order.get("symbol") or ""),
+    )
+    if tp_sl_order.get("quantity") not in (None, "", "0"):
+        _validate_product_rules("futures", tp_sl_order, fresh_payload.get("product_facts"))
+    _validate_tp_sl_against_account(tp_sl_order, fresh_payload)
+    fresh_analysis = _internal_preview_context(fresh_payload, tp_sl_order)
+    environment = _environment_from_payload_or_mode(fresh_payload, "live", "futures")
+    fresh_analysis = _merge_environment_context(
+        fresh_analysis,
+        trading_mode="live",
+        environment=environment,
+    )
+    fresh_analysis["user_environment_prefix"] = _query_environment_prefix(
+        environment,
+        language=intent.get("confirmation_language"),
+    )
+    _validate_preview_completeness(fresh_payload, fresh_analysis)
+    fresh_signature = build_risk_signature(
+        profile_name=intent.get("profile_name"),
+        market="futures",
+        trading_mode="live",
+        order_preview=intent.get("order_preview") or tp_sl_order,
+        raw_order=intent.get("raw_order") or tp_sl_order,
+        analysis_output=fresh_analysis,
+        intent_type="tp_sl_order",
+        environment=environment,
+        tp_sl_order=tp_sl_order,
+        intent_id=str(intent.get("intent_id") or ""),
+        created_at=intent.get("created_at"),
+        expires_at=intent.get("expires_at"),
+        ttl_seconds=intent.get("ttl_seconds"),
+        confirmation_reply_text=intent.get("confirmation_reply_text"),
+        confirmation_language=intent.get("confirmation_language"),
+        freshness_required=intent.get("freshness_required"),
+    )
+    if not hmac.compare_digest(str(intent.get("risk_signature") or ""), fresh_signature):
+        raise AggregationInputError("risk facts changed since preview; generate a new preview first")
+
+
 def cmd_confirm_order(args: argparse.Namespace, *, now_ms: int | None = None) -> int:
     intent = load_intent()
     if intent is None:
         _output_json({"ok": False, "error": "No pending order intent was found."}, args.pretty)
+        return 1
+    if intent.get("submission_status") in {"REVIEW_REQUIRED", "SUBMITTED"}:
+        _output_json(
+            {
+                "ok": False,
+                "status": "REVIEW_REQUIRED",
+                "error": intent.get("submission_error") or "pending order requires manual reconciliation",
+                "next_action": "INSPECT_AND_RECONCILE_MANUALLY",
+            },
+            args.pretty,
+        )
         return 1
     if intent.get("intent_type", "order") != "order":
         _output_json({"ok": False, "error": "Pending intent is not a regular order. Use confirm-tp-sl for TP/SL intents."}, args.pretty)
         return 1
     if args.intent_id and args.intent_id != intent.get("intent_id"):
         _output_json({"ok": False, "error": "Intent id does not match the saved pending order."}, args.pretty)
+        return 1
+    requested_profile = _arg_value(args, "profile", None)
+    if requested_profile not in (None, "") and requested_profile != intent.get("profile_name"):
+        _output_json({"ok": False, "error": "profile does not match the saved pending order."}, args.pretty)
         return 1
     current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
     if intent_is_expired(intent, now_ms=current_ms):
@@ -2210,6 +2799,17 @@ def cmd_confirm_order(args: argparse.Namespace, *, now_ms: int | None = None) ->
             args.pretty,
         )
         return 1
+    expected_reply = _expected_confirmation_text(intent, args)
+    if _arg_value(args, "user_reply", None) != expected_reply:
+        _output_json(
+            {
+                "ok": False,
+                "error": "user reply does not exactly match the latest confirmation text.",
+                "expected_reply": expected_reply,
+            },
+            args.pretty,
+        )
+        return 1
     if not args.intent_id or not args.risk_signature:
         _output_json(
             {
@@ -2229,23 +2829,51 @@ def cmd_confirm_order(args: argparse.Namespace, *, now_ms: int | None = None) ->
         )
         return 1
 
-    if intent_mode == "live":
+    try:
         if intent.get("auto_fallback_operation_key") is not None:
-            execution_payload = _submit_live_auto_fallback_order(intent)
+            _revalidate_auto_fallback_intent(intent)
         else:
-            execution_payload = _submit_live_order(
+            _revalidate_intent_facts(intent)
+        if intent_mode == "live":
+            if intent.get("auto_fallback_operation_key") is not None:
+                execution_payload = _submit_live_auto_fallback_order(intent)
+            else:
+                execution_payload = _submit_live_order(
+                    market=str(intent["market"]),
+                    profile_name=intent.get("profile_name"),
+                    raw_order=dict(intent["raw_order"]),
+                )
+        else:
+            execution_payload = _submit_order(
                 market=str(intent["market"]),
                 profile_name=intent.get("profile_name"),
+                trading_mode=intent_mode,
                 raw_order=dict(intent["raw_order"]),
             )
-    else:
-        execution_payload = _submit_order(
-            market=str(intent["market"]),
-            profile_name=intent.get("profile_name"),
-            trading_mode=intent_mode,
-            raw_order=dict(intent["raw_order"]),
+    except SubmissionUncertainError as exc:
+        _mark_intent_review_required(intent, str(exc))
+        _output_json(
+            {"ok": False, "status": "REVIEW_REQUIRED", "error": str(exc), "next_action": "INSPECT_AND_RECONCILE_MANUALLY"},
+            args.pretty,
         )
-    clear_intent()
+        return 1
+    except (AggregationInputError, KeyError, TypeError, ValueError, SystemExit) as exc:
+        _output_json({"ok": False, "error": str(exc)}, args.pretty)
+        return 1
+    try:
+        clear_intent()
+    except OSError as exc:
+        _mark_intent_review_required(intent, f"order was submitted but pending intent cleanup failed: {exc}")
+        _output_json(
+            {
+                "ok": False,
+                "status": "REVIEW_REQUIRED",
+                "error": "order submission completed but local confirmation state could not be cleared",
+                "next_action": "INSPECT_AND_RECONCILE_MANUALLY",
+            },
+            args.pretty,
+        )
+        return 1
     environment = intent.get("environment")
     if not isinstance(environment, dict):
         environment = _environment_for_mode(intent_mode, str(intent["market"]))
@@ -2263,11 +2891,26 @@ def cmd_confirm_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
     if intent is None:
         _output_json({"ok": False, "error": "No pending TP/SL intent was found."}, args.pretty)
         return 1
+    if intent.get("submission_status") in {"REVIEW_REQUIRED", "SUBMITTED"}:
+        _output_json(
+            {
+                "ok": False,
+                "status": "REVIEW_REQUIRED",
+                "error": intent.get("submission_error") or "pending TP/SL order requires manual reconciliation",
+                "next_action": "INSPECT_AND_RECONCILE_MANUALLY",
+            },
+            args.pretty,
+        )
+        return 1
     if intent.get("intent_type") != "tp_sl_order":
         _output_json({"ok": False, "error": "Pending intent is not a TP/SL order."}, args.pretty)
         return 1
     if args.intent_id and args.intent_id != intent.get("intent_id"):
         _output_json({"ok": False, "error": "Intent id does not match the saved pending TP/SL order."}, args.pretty)
+        return 1
+    requested_profile = _arg_value(args, "profile", None)
+    if requested_profile not in (None, "") and requested_profile != intent.get("profile_name"):
+        _output_json({"ok": False, "error": "profile does not match the saved pending TP/SL order."}, args.pretty)
         return 1
     current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
     if intent_is_expired(intent, now_ms=current_ms):
@@ -2281,6 +2924,17 @@ def cmd_confirm_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
         return 1
     if not _confirm_flags_match_mode(args, intent_mode):
         _output_json({"ok": False, "error": "confirm-tp-sl still requires --confirm-live before sending a real TP/SL order."}, args.pretty)
+        return 1
+    expected_reply = _expected_confirmation_text(intent, args)
+    if _arg_value(args, "user_reply", None) != expected_reply:
+        _output_json(
+            {
+                "ok": False,
+                "error": "user reply does not exactly match the latest confirmation text.",
+                "expected_reply": expected_reply,
+            },
+            args.pretty,
+        )
         return 1
     if not args.intent_id or not args.risk_signature:
         _output_json(
@@ -2306,11 +2960,36 @@ def cmd_confirm_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
         _output_json({"ok": False, "error": "Pending TP/SL intent is missing tp_sl_order."}, args.pretty)
         return 1
 
-    execution_payload = _submit_live_tp_sl_order(
-        profile_name=intent.get("profile_name"),
-        raw_order=dict(tp_sl_order),
-    )
-    clear_intent()
+    try:
+        _revalidate_tp_sl_intent(intent)
+        execution_payload = _submit_live_tp_sl_order(
+            profile_name=intent.get("profile_name"),
+            raw_order=dict(tp_sl_order),
+        )
+    except SubmissionUncertainError as exc:
+        _mark_intent_review_required(intent, str(exc))
+        _output_json(
+            {"ok": False, "status": "REVIEW_REQUIRED", "error": str(exc), "next_action": "INSPECT_AND_RECONCILE_MANUALLY"},
+            args.pretty,
+        )
+        return 1
+    except (AggregationInputError, KeyError, TypeError, ValueError, SystemExit) as exc:
+        _output_json({"ok": False, "error": str(exc)}, args.pretty)
+        return 1
+    try:
+        clear_intent()
+    except OSError as exc:
+        _mark_intent_review_required(intent, f"TP/SL order was submitted but pending intent cleanup failed: {exc}")
+        _output_json(
+            {
+                "ok": False,
+                "status": "REVIEW_REQUIRED",
+                "error": "TP/SL submission completed but local confirmation state could not be cleared",
+                "next_action": "INSPECT_AND_RECONCILE_MANUALLY",
+            },
+            args.pretty,
+        )
+        return 1
     environment = intent.get("environment")
     if not isinstance(environment, dict):
         environment = _environment_for_mode(intent_mode, "futures")
@@ -2323,35 +3002,175 @@ def cmd_confirm_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
     return 0
 
 
-def cmd_account_scan(args: argparse.Namespace) -> int:
-    trading_mode = _normalize_trading_mode(_arg_value(args, "trading_mode", DEFAULT_TRADING_MODE))
-    trade_aggregator = TradeDataAggregator()
-    payload = trade_aggregator.collect_account_risk_payload(
+def _cancel_query_from_intent(intent: dict[str, Any]) -> dict[str, Any]:
+    raw = intent.get("raw_order")
+    if not isinstance(raw, dict):
+        raise AggregationInputError("pending cancel intent is missing order context")
+    market = str(intent.get("market") or "").strip().lower()
+    query: dict[str, Any] = {}
+    order_id = raw.get("order_id") or raw.get("orderId")
+    client_oid = raw.get("client_oid") or raw.get("origClientOrderId")
+    if order_id not in (None, ""):
+        query["orderId"] = order_id
+    if client_oid not in (None, ""):
+        query["origClientOrderId"] = client_oid
+    if market == "spot" and raw.get("symbol") not in (None, ""):
+        query["symbol"] = raw["symbol"]
+    if not query or not any(key in query for key in ("orderId", "origClientOrderId")):
+        raise AggregationInputError("cancel requires order_id or client_oid")
+    return query
+
+
+def cmd_preview_cancel(args: argparse.Namespace, *, now_ms: int | None = None) -> int:
+    market = str(args.market).strip().lower()
+    mode = _normalize_trading_mode(_arg_value(args, "trading_mode", "live"))
+    if mode != "live":
+        _output_error("demo_cancel_unsupported: demo order cancellation is unavailable", args.pretty)
+        return 1
+    if market == "spot" and not args.symbol:
+        _output_error("symbol is required for spot cancellation", args.pretty)
+        return 1
+    if not args.order_id and not args.client_oid:
+        _output_error("cancel requires --order-id or --client-oid", args.pretty)
+        return 1
+    raw_order: dict[str, Any] = {
+        "symbol": args.symbol,
+        "order_id": args.order_id,
+        "client_oid": args.client_oid,
+    }
+    environment = _environment_for_mode(mode, market)
+    confirmation_language = resolve_language(_arg_value(args, "language", None))
+    preview = {
+        "market": market,
+        "symbol": args.symbol,
+        "operation": "cancel_order",
+        "order_id": args.order_id,
+        "client_oid": args.client_oid,
+    }
+    analysis_output = {
+        "alerts": [],
+        "partial": False,
+        "degraded_reasons": [],
+        "constraints": [],
+        "trading_mode": mode,
+        "environment": environment,
+        "user_environment_prefix": _query_environment_prefix(environment, language=confirmation_language),
+    }
+    current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    intent = build_intent(
         profile_name=args.profile,
-        market=args.market,
-        trading_mode=trading_mode,
-        symbol=args.symbol,
-    )
-    environment = _environment_from_payload_or_mode(payload, trading_mode, args.market)
-    analysis_output = analysis.analyze_account_risk(payload)
-    analysis_output = _merge_environment_context(
-        analysis_output,
-        trading_mode=trading_mode,
+        market=market,
+        trading_mode=mode,
         environment=environment,
+        order_preview=preview,
+        raw_order=raw_order,
+        analysis_output=analysis_output,
+        now_ms=current_ms,
+        ttl_seconds=args.ttl_seconds,
+        intent_type="cancel_order",
+        confirmation_reply_text=CONFIRMATION_PROMPTS[confirmation_language]["reply_text"],
+        confirmation_language=confirmation_language,
+        freshness_required=False,
     )
-    analysis_output["user_environment_prefix"] = _query_environment_prefix(
-        environment,
-        language=_arg_value(args, "language", None),
+    save_intent(intent)
+    response = _confirmation_only_response(
+        order_preview=preview,
+        environment=environment,
+        user_environment_prefix=analysis_output["user_environment_prefix"],
     )
-    _output_json(analysis_output, args.pretty)
+    response.update({
+        "intent_type": "cancel_order",
+        "intent_id": intent["intent_id"],
+        "expires_at": intent["expires_at"],
+        "risk_signature": intent["risk_signature"],
+    })
+    response["user_confirmation"] = _build_user_confirmation(
+        confirmation_language,
+        environment=environment,
+        preview_context={"order_preview": {**preview, "order_type": "CANCEL"}, "alerts": []},
+    )
+    _output_json(response, args.pretty)
+    return 0
+
+
+def cmd_confirm_cancel(args: argparse.Namespace, *, now_ms: int | None = None) -> int:
+    intent = load_intent()
+    if not isinstance(intent, dict) or intent.get("intent_type") != "cancel_order":
+        _output_json({"ok": False, "error": "No pending cancel intent was found."}, args.pretty)
+        return 1
+    if intent.get("submission_status") in {"REVIEW_REQUIRED", "SUBMITTED"}:
+        _output_json({"ok": False, "status": "REVIEW_REQUIRED", "error": intent.get("submission_error"), "next_action": "INSPECT_AND_RECONCILE_MANUALLY"}, args.pretty)
+        return 1
+    if intent_is_expired(intent, now_ms=now_ms if now_ms is not None else int(time.time() * 1000)):
+        clear_intent()
+        _output_json({"ok": False, "error": "Pending cancel intent has expired. Generate a new preview first."}, args.pretty)
+        return 1
+    if args.intent_id != intent.get("intent_id") or not args.risk_signature:
+        _output_json({"ok": False, "error": "confirm-cancel requires matching intent_id and risk_signature."}, args.pretty)
+        return 1
+    if not intent_signature_is_valid(intent, provided_signature=args.risk_signature):
+        _output_json({"ok": False, "error": "Risk signature does not match the pending cancel intent."}, args.pretty)
+        return 1
+    if _arg_value(args, "user_reply", None) != _expected_confirmation_text(intent, args):
+        _output_json({"ok": False, "error": "user reply does not exactly match the latest confirmation text."}, args.pretty)
+        return 1
+    if _arg_value(args, "profile", None) not in (None, "") and _arg_value(args, "profile", None) != intent.get("profile_name"):
+        _output_json({"ok": False, "error": "profile does not match the pending cancel intent."}, args.pretty)
+        return 1
+    try:
+        query = _cancel_query_from_intent(intent)
+        market = str(intent.get("market") or "").strip().lower()
+        if market == "futures":
+            contract_api, client = _build_contract_client(intent.get("profile_name"))
+            code, payload = contract_api.execute_endpoint_payload(
+                client=client,
+                endpoint_key="transaction.cancel_order",
+                query=query,
+                body={},
+                dry_run=False,
+                confirm_live=True,
+                confirm_demo=False,
+                trading_mode="live",
+            )
+        elif market == "spot":
+            spot_api, client = _build_spot_client(intent.get("profile_name"))
+            code, payload = spot_api.execute_endpoint_payload(
+                client=client,
+                endpoint_key="spot.order.cancel_order",
+                query=query,
+                body={},
+                dry_run=False,
+                confirm_live=True,
+                trading_mode="live",
+            )
+        else:
+            raise AggregationInputError("unsupported cancellation market")
+        if code != 0 or not payload.get("ok"):
+            if payload.get("status") is None:
+                raise SubmissionUncertainError("cancel result is uncertain; inspect the exchange before retrying")
+            raise AggregationInputError(f"cancel request failed: {payload.get('result')}")
+    except SubmissionUncertainError as exc:
+        _mark_intent_review_required(intent, str(exc))
+        _output_json({"ok": False, "status": "REVIEW_REQUIRED", "error": str(exc), "next_action": "INSPECT_AND_RECONCILE_MANUALLY"}, args.pretty)
+        return 1
+    except (AggregationInputError, KeyError, TypeError, ValueError, SystemExit) as exc:
+        _output_json({"ok": False, "error": str(exc)}, args.pretty)
+        return 1
+    try:
+        clear_intent()
+    except OSError as exc:
+        _mark_intent_review_required(intent, f"cancel succeeded but local intent cleanup failed: {exc}")
+        _output_json({"ok": False, "status": "REVIEW_REQUIRED", "error": "cancel succeeded but local confirmation state could not be cleared", "next_action": "INSPECT_AND_RECONCILE_MANUALLY"}, args.pretty)
+        return 1
+    _output_json({"ok": True, "result": payload.get("result"), "environment": intent.get("environment"), "trading_mode": "live"}, args.pretty)
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Preview order risk and confirm WEEX orders.")
+    parser = argparse.ArgumentParser(description="Preview validated orders and confirm WEEX orders.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    preview = subparsers.add_parser("preview-order", help="Preview risk before placing an order.")
+    preview = subparsers.add_parser("preview-order", help="Preview an order before placing it.")
     preview.add_argument("--profile", default=None, help="Saved profile name; omit when using complete WEEX environment credentials.")
     preview.add_argument("--market", required=True, choices=("futures", "spot"))
     preview.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
@@ -2363,7 +3182,7 @@ def build_parser() -> argparse.ArgumentParser:
     preview_tp_sl = subparsers.add_parser(
         "preview-tp-sl",
         help="Preview a real trading only futures TP/SL conditional order; demo TP/SL is not supported.",
-        description="Preview risk before placing a futures TP/SL conditional order. This flow is real trading only; demo TP/SL is not supported.",
+        description="Preview a futures TP/SL conditional order. This flow is real trading only; demo TP/SL is not supported.",
     )
     preview_tp_sl.add_argument("--profile", default=None, help="Saved profile name; omit when using complete WEEX environment credentials.")
     preview_tp_sl.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE, help="TP/SL trading mode; real trading only because demo TP/SL is not supported.")
@@ -2373,8 +3192,10 @@ def build_parser() -> argparse.ArgumentParser:
     preview_tp_sl.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     confirm = subparsers.add_parser("confirm-order", help="Submit the last previewed order.")
+    confirm.add_argument("--profile", default=None, help="Optional saved profile name; must match the preview profile.")
     confirm.add_argument("--intent-id", default=None, help="Optional explicit intent id to confirm.")
     confirm.add_argument("--risk-signature", default=None, help="Risk signature returned by preview-order.")
+    confirm.add_argument("--user-reply", default=None, help="Exact independent user confirmation text from the latest preview.")
     confirm.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
     confirm.add_argument("--confirm-live", action="store_true", help="Required before sending a real order.")
     confirm.add_argument("--confirm-demo", action="store_true", help="Required before sending a demo futures order.")
@@ -2386,20 +3207,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Submit the last previewed real trading futures TP/SL conditional order; demo TP/SL is not supported.",
         description="Submit the last previewed futures TP/SL conditional order. This flow is real trading only; demo TP/SL is not supported.",
     )
+    confirm_tp_sl.add_argument("--profile", default=None, help="Optional saved profile name; must match the preview profile.")
     confirm_tp_sl.add_argument("--intent-id", default=None, help="Optional explicit intent id to confirm.")
     confirm_tp_sl.add_argument("--risk-signature", default=None, help="Risk signature returned by preview-tp-sl.")
+    confirm_tp_sl.add_argument("--user-reply", default=None, help="Exact independent user confirmation text from the latest preview.")
     confirm_tp_sl.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
     confirm_tp_sl.add_argument("--confirm-live", action="store_true", help="Required before sending a real TP/SL order.")
     confirm_tp_sl.add_argument("--confirm-demo", action="store_true", help="Rejected because demo TP/SL is not supported.")
     confirm_tp_sl.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
-    account_scan = subparsers.add_parser("account-scan", help="Review current account-level risk without an order preview.")
-    account_scan.add_argument("--profile", required=True, help="Saved profile name.")
-    account_scan.add_argument("--market", required=True, choices=("futures", "spot"))
-    account_scan.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
-    account_scan.add_argument("--symbol", default=None, help="Optional trading pair focus.")
-    account_scan.add_argument("--language", choices=("zh", "en"), default=None, help="Language for user-facing environment prefix.")
-    account_scan.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    preview_cancel = subparsers.add_parser("preview-cancel", help="Preview an order cancellation.")
+    preview_cancel.add_argument("--profile", default=None, help="Saved profile name; omit when using complete environment credentials.")
+    preview_cancel.add_argument("--market", required=True, choices=("futures", "spot"))
+    preview_cancel.add_argument("--trading-mode", choices=TRADING_MODES, default="live")
+    preview_cancel.add_argument("--symbol", default=None, help="Spot symbol; optional for futures.")
+    preview_cancel.add_argument("--order-id", default=None)
+    preview_cancel.add_argument("--client-oid", default=None)
+    preview_cancel.add_argument("--ttl-seconds", type=int, default=300)
+    preview_cancel.add_argument("--language", choices=("zh", "en"), default=None)
+    preview_cancel.add_argument("--pretty", action="store_true")
+
+    confirm_cancel = subparsers.add_parser("confirm-cancel", help="Submit the latest cancellation preview.")
+    confirm_cancel.add_argument("--profile", default=None)
+    confirm_cancel.add_argument("--intent-id", required=True)
+    confirm_cancel.add_argument("--risk-signature", required=True)
+    confirm_cancel.add_argument("--user-reply", required=True)
+    confirm_cancel.add_argument("--pretty", action="store_true")
 
     return parser
 
@@ -2415,8 +3248,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_confirm_order(args)
         if args.command == "confirm-tp-sl":
             return cmd_confirm_tp_sl(args)
-        if args.command == "account-scan":
-            return cmd_account_scan(args)
+        if args.command == "preview-cancel":
+            return cmd_preview_cancel(args)
+        if args.command == "confirm-cancel":
+            return cmd_confirm_cancel(args)
         raise SystemExit(f"Unsupported command: {args.command}")
     except AggregationInputError as exc:
         _output_error(str(exc), bool(getattr(args, "pretty", False)))

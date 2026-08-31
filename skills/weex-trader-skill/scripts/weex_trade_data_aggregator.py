@@ -31,7 +31,7 @@ FUTURES_FILL_LIMIT = 100
 FUTURES_BILL_LIMIT = 100
 FUTURES_OPEN_ORDER_LIMIT = 100
 FUTURES_PENDING_LIMIT = 100
-SPOT_ORDER_LIMIT = 1000
+SPOT_ORDER_LIMIT = 200
 SPOT_ORDER_SAFE_LIMIT = 100
 MAX_SPOT_HISTORY_WINDOW_DAYS = 90
 SPOT_FILL_LIMIT = 100
@@ -293,7 +293,14 @@ def _should_retry_spot_history_orders_with_safe_limit(error: Exception, *, limit
     message = str(error).lower()
     return (
         "spot.order.history_orders" in message
-        and ("unknown error occurred" in message or "'code': -1000" in message or '"code": -1000' in message)
+        and (
+            "unknown error occurred" in message
+            or "'code': -1000" in message
+            or '"code": -1000' in message
+            or "'code': -1142" in message
+            or '"code": -1142' in message
+            or "between 1 and 200" in message
+        )
     )
 
 

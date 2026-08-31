@@ -344,6 +344,21 @@ def add_environment_context(payload: Dict[str, Any], environment: Dict[str, Any]
     payload["user_environment_prefix"] = user_environment_prefix(environment)
 
 
+def validate_endpoint_constraints(
+    endpoint: Endpoint,
+    query: Dict[str, Any],
+    body: Dict[str, Any],
+) -> None:
+    del body
+    if endpoint.key == "spot.market.get_depth_data" and "limit" in query:
+        try:
+            depth_limit = int(query["limit"])
+        except (TypeError, ValueError) as exc:
+            raise SystemExit("limit must be one of the documented values: 15 or 200") from exc
+        if depth_limit not in {15, 200}:
+            raise SystemExit("limit must be one of the documented values: 15 or 200")
+
+
 def execute_endpoint(
     client: WeexSpotClient,
     endpoint_key: str,
@@ -354,6 +369,7 @@ def execute_endpoint(
     pretty: bool,
 ) -> int:
     endpoint = ENDPOINTS[endpoint_key]
+    validate_endpoint_constraints(endpoint, query, body)
     environment = private_environment() if endpoint.requires_auth else None
 
     if is_mutating(endpoint) and not confirm_live and not dry_run:

@@ -692,7 +692,7 @@ NONE
 | `symbol` | `String` | `Yes` | Trading pair to query. |
 | `startTime` | `Long` | `No` | Start time in milliseconds. |
 | `endTime` | `Long` | `No` | End time in milliseconds. Must be greater than or equal to startTime . |
-| `limit` | `Integer` | `No` | Number of records per page (default 100, maximum 1000). |
+| `limit` | `Integer` | `No` | Number of records per page (default 100, maximum 200). |
 | `page` | `Integer` | `No` | Page index starting from 1 (default 1). |
 
 ### Response Parameters

@@ -444,6 +444,14 @@ def validate_endpoint_constraints(
     query: Dict[str, Any],
     body: Dict[str, Any],
 ) -> None:
+    if endpoint.key == "market.get_depth_data" and "limit" in query:
+        try:
+            depth_limit = int(query["limit"])
+        except (TypeError, ValueError) as exc:
+            raise SystemExit("limit must be one of the documented values: 15 or 200") from exc
+        if depth_limit not in {15, 200}:
+            raise SystemExit("limit must be one of the documented values: 15 or 200")
+
     if endpoint.key == "transaction.place_orders_batch":
         batch_orders = body.get("batchOrders")
         if batch_orders is not None:

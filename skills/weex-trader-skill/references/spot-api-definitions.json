@@ -1526,7 +1526,7 @@
           "name": "limit",
           "type": "Integer",
           "required": "No",
-          "description": "Number of records per page (default 100, maximum 1000)."
+          "description": "Number of records per page (default 100, maximum 200)."
         },
         {
           "name": "page",

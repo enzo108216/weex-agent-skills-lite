@@ -1,6 +1,8 @@
-# weex-agent-skills-competition
+# weex-agent-skills-lite
 
-仅支持 OpenClaw 的 WEEX 交易比赛专用项目。保留正式 Trader 的现货/合约交易、行情/账户查询和完整自动交易授权，不安装 Analysis、Monitor、Partner 等独立 Skill。
+项目发布地址：[weex-agent-skills-lite](https://github.com/weex-labs/weex-agent-skills-lite)
+
+仅支持 OpenClaw 的 WEEX Trader Lite 专用项目。保留正式 Trader 的现货/合约交易、行情/账户查询和完整自动交易授权，不安装 Analysis、Monitor、Partner 等独立 Skill。
 
 ## 在 OpenClaw 中安装或更新
 

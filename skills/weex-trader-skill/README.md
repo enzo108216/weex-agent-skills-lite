@@ -1,6 +1,8 @@
-# weex-trader-skill (Competition / OpenClaw)
+# weex-trader-skill (Lite / OpenClaw)
 
-This is the only skill shipped by `weex-agent-skills-competition`. It is installed and updated through the OpenClaw updater at `scripts/update_openclaw_skills.sh`.
+Published project: [weex-agent-skills-lite](https://github.com/weex-labs/weex-agent-skills-lite)
+
+This is the only skill shipped by `weex-agent-skills-lite`. It is installed and updated through the OpenClaw updater at `scripts/update_openclaw_skills.sh`.
 
 ## Supported workflows
 

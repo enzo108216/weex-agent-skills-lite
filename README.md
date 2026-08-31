@@ -1,6 +1,8 @@
-# weex-agent-skills-competition
+# weex-agent-skills-lite
 
-OpenClaw-only WEEX trading-competition skill. The project keeps the formal Trader trading and market/account behavior and the complete saved-profile automated-strategy authorization path, while shipping no separate Analysis, Monitor, or Partner skills.
+Published project: [weex-agent-skills-lite](https://github.com/weex-labs/weex-agent-skills-lite)
+
+OpenClaw-only WEEX Trader Lite skill. The project keeps the formal Trader trading and market/account behavior and the complete saved-profile automated-strategy authorization path, while shipping no separate Analysis, Monitor, or Partner skills.
 
 ## Install or update in OpenClaw
 
@@ -10,7 +12,7 @@ From a checkout of this project:
 bash skills/weex-trader-skill/scripts/update_openclaw_skills.sh --dev
 ```
 
-For a published release, run the same script without `--dev` and set `WEEX_OPENCLAW_APPROVED_COMMIT` to the release commit. Production mode accepts only the competition repository, `main`, and that pinned commit. The updater validates the Git checkout, refreshes the single `weex-trader-skill` link, runs OpenClaw checks, and restores the previous link if validation fails.
+For a published release, run the same script without `--dev` and set `WEEX_OPENCLAW_APPROVED_COMMIT` to the release commit. Production mode accepts only the Lite repository, `main`, and that pinned commit. The updater validates the Git checkout, refreshes the single `weex-trader-skill` link, runs OpenClaw checks, and restores the previous link if validation fails.
 
 ## What it supports
 

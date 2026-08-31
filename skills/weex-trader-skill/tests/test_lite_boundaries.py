@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 
 
-class CompetitionBoundaryTests(unittest.TestCase):
+class LiteBoundaryTests(unittest.TestCase):
     def test_project_contains_only_the_trader_skill(self) -> None:
         skill_dirs = sorted(
             path.name

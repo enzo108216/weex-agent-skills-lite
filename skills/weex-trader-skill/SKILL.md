@@ -1,11 +1,13 @@
 ---
-description: Use for the WEEX trading-competition workflow in OpenClaw: natural-language spot/futures trading, market/account queries, and fully authorized automated strategies.
+description: Use for the WEEX Trader Lite workflow in OpenClaw: natural-language spot/futures trading, market/account queries, and fully authorized automated strategies.
 name: weex-trader-skill
 ---
 
-# WEEX Trader Skill — Competition Edition
+# WEEX Trader Skill — Lite Edition
 
-This project is the OpenClaw-only WEEX skill for a trading competition. It keeps the formal Trader trading and account/market behavior, including the complete automated-strategy authorization path, while omitting the separate Analysis, Monitor, and Partner skills.
+The final published project is [weex-agent-skills-lite](https://github.com/weex-labs/weex-agent-skills-lite).
+
+This project is the OpenClaw-only WEEX Trader Lite skill. It keeps the formal Trader trading and account/market behavior, including the complete automated-strategy authorization path, while omitting the separate Analysis, Monitor, and Partner skills.
 
 The repository is the source of truth. Do not infer unsupported endpoints or fall back to another skill. Before any private query, order preview, profile/Vault operation, or automatic-order operation, run the Trader preflight and stop when runtime, environment, profile, or dependency checks are not ready.
 
@@ -17,12 +19,12 @@ Use the project updater, not `gh skill install` or another host installer:
 bash skills/weex-trader-skill/scripts/update_openclaw_skills.sh
 ```
 
-For a published release, set `WEEX_OPENCLAW_APPROVED_COMMIT` to the release commit and run without `--dev`. Production mode accepts only the configured competition repository, `main`, and that immutable commit pin.
+For a published release, set `WEEX_OPENCLAW_APPROVED_COMMIT` to the release commit and run without `--dev`. Production mode accepts only the configured Lite repository, `main`, and that immutable commit pin.
 
 For an explicitly selected local development checkout only:
 
 ```bash
-WEEX_OPENCLAW_REPO_URL=/path/to/weex-agent-skills-competition \
+WEEX_OPENCLAW_REPO_URL=/path/to/weex-agent-skills-lite \
 WEEX_OPENCLAW_BRANCH=feature/competition-openclaw \
 bash skills/weex-trader-skill/scripts/update_openclaw_skills.sh --dev
 ```

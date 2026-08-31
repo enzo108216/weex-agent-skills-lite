@@ -259,7 +259,7 @@ def _launcher_for_os(os_family: str) -> str:
 
 
 def _route_profile_management(os_family: str, language: str, gui_available: bool, interaction_mode: str) -> str:
-    # The competition package ships only the portable profile CLI.  Keep the
+    # The Lite package ships only the portable profile CLI.  Keep the
     # GUI probe in preflight for diagnostics, but never route to a desktop
     # manager that is not present in this checkout.
     del gui_available

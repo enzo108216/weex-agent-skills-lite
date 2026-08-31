@@ -1,4 +1,4 @@
-# WEEX Trading Competition Project Guidance
+# WEEX Trader Lite Project Guidance
 
 - `skills/weex-trader-skill/` is the only source-of-truth implementation layer.
 - This project is OpenClaw-only and ships one skill link: `weex-trader-skill`.

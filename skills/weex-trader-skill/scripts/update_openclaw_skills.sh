@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly DEFAULT_REPO_URL="https://github.com/weex-labs/weex-agent-skills-competition"
+readonly DEFAULT_REPO_URL="https://github.com/weex-labs/weex-agent-skills-lite"
 readonly DEFAULT_BRANCH="main"
 readonly APPROVED_COMMIT="${WEEX_OPENCLAW_APPROVED_COMMIT:-}"
 readonly OPENCLAW_ROOT="${OPENCLAW_HOME:-${HOME}/.openclaw}"
-readonly REPO_DIR="${WEEX_OPENCLAW_REPO_DIR:-${OPENCLAW_ROOT}/skill-repos/weex-agent-skills-competition}"
+readonly REPO_DIR="${WEEX_OPENCLAW_REPO_DIR:-${OPENCLAW_ROOT}/skill-repos/weex-agent-skills-lite}"
 readonly SKILLS_DIR="${WEEX_OPENCLAW_SKILLS_DIR:-${OPENCLAW_ROOT}/skills}"
-readonly BIN_LINK="${WEEX_OPENCLAW_BIN_LINK:-${HOME}/bin/update-weex-openclaw-skills-competition.sh}"
+readonly BIN_LINK="${WEEX_OPENCLAW_BIN_LINK:-${HOME}/bin/update-weex-openclaw-skills-lite.sh}"
 readonly SCRIPT_RELATIVE_PATH="skills/weex-trader-skill/scripts/update_openclaw_skills.sh"
-readonly STABLE_UPDATER="${OPENCLAW_ROOT}/update-weex-openclaw-skills-competition.sh"
+readonly STABLE_UPDATER="${OPENCLAW_ROOT}/update-weex-openclaw-skills-lite.sh"
 
 readonly -a WEEX_SKILLS=("weex-trader-skill")
 
@@ -34,7 +34,7 @@ if (( DEV_MODE == 0 )); then
   fi
   REPO_URL="${DEFAULT_REPO_URL}"
   BRANCH="${DEFAULT_BRANCH}"
-  [[ -n "${APPROVED_COMMIT}" ]] || { printf 'Error: production updates require WEEX_OPENCLAW_APPROVED_COMMIT to pin a released competition commit\n' >&2; exit 1; }
+  [[ -n "${APPROVED_COMMIT}" ]] || { printf 'Error: production updates require WEEX_OPENCLAW_APPROVED_COMMIT to pin a released Lite commit\n' >&2; exit 1; }
 else
   REPO_URL="${WEEX_OPENCLAW_REPO_URL:-${DEFAULT_REPO_URL}}"
   BRANCH="${WEEX_OPENCLAW_BRANCH:-${DEFAULT_BRANCH}}"

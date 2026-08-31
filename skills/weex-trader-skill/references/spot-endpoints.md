@@ -1,6 +1,6 @@
-# WEEX Spot Endpoints (Competition)
+# WEEX Spot Endpoints (Lite)
 
-Use `references/spot-api-definitions.json` and `references/spot-api-definitions.md` as the endpoint source. The competition runtime exposes only `spot.account.*`, `spot.config.*`, `spot.market.*`, `spot.order.*`, and `spot.tax.*` entries.
+Use `references/spot-api-definitions.json` and `references/spot-api-definitions.md` as the endpoint source. The Lite runtime exposes only `spot.account.*`, `spot.config.*`, `spot.market.*`, `spot.order.*`, and `spot.tax.*` entries.
 
 Base URL: `https://api-spot.weex.com`.
 

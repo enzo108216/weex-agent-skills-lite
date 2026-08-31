@@ -2,7 +2,7 @@
   "schema_version": 1,
   "identity": {
     "name": "weex-trader-skill",
-    "project": "weex-agent-skills-competition",
+    "project": "weex-agent-skills-lite",
     "source_of_truth": "SKILL.md",
     "purpose": "OpenClaw-only WEEX spot/futures trading, market/account queries, and complete automated-strategy authorization."
   },

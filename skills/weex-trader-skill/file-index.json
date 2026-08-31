@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "purpose": "OpenClaw competition Trader file guide.",
+  "purpose": "OpenClaw Trader Lite file guide.",
   "file_guide": {
     "scripts/weex_contract_api.py": {"role": "Contract/futures REST, official simulated-futures routing, market/account/order operations."},
     "scripts/weex_spot_api.py": {"role": "Spot REST market/account/order operations."},
@@ -36,7 +36,7 @@
     "scripts/generate_weex_api_definitions.py": {"role": "Maintainer-only generator for official Spot/Futures endpoint definitions."},
     "scripts/weex_runtime_setup.py": {"role": "Python dependency/runtime setup."},
     "scripts/weex_url_policy.py": {"role": "WEEX HTTPS base URL allowlist."},
-    "scripts/update_openclaw_skills.sh": {"role": "OpenClaw-only updater for the single competition Trader skill with rollback."},
+    "scripts/update_openclaw_skills.sh": {"role": "OpenClaw-only updater for the single Lite Trader skill with rollback."},
     "references/contract-api-definitions.json": {"role": "Machine-readable contract endpoint catalog."},
     "references/contract-api-definitions.md": {"role": "Human-readable contract endpoint catalog generated from the official definitions."},
     "references/contract-endpoints.md": {"role": "Contract endpoint routing and operator usage reference."},

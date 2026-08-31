@@ -20,7 +20,7 @@ from weex_gui_bootstrap import RuntimeProbe  # noqa: E402
 
 
 class AgentStateGuiRuntimeTests(unittest.TestCase):
-    def test_competition_routes_profile_and_vault_management_to_cli_only(self) -> None:
+    def test_lite_routes_profile_and_vault_management_to_cli_only(self) -> None:
         self.assertEqual(
             agent_state._route_profile_management("Darwin", "en", True, "desktop_interactive"),
             "macos_cli_en",

@@ -472,6 +472,7 @@ NONE
 |---|---|---|---|
 | `symbol` | `String` | `Yes` | Trading pair, e.g. BTCUSDT . |
 | `interval` | `String` | `Yes` | Candlestick interval (e.g. [1m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,1w]). |
+| `limit` | `Integer` | `No` | Number of klines to return; range 1-1000. |
 
 ### Response Parameters
 

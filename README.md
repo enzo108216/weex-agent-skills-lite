@@ -1,6 +1,6 @@
 # weex-agent-skills-lite
 
-Published project: [weex-agent-skills-lite](https://github.com/weex-labs/weex-agent-skills-lite)
+Published project: [weex-agent-skills-lite](https://github.com/enzo108216/weex-agent-skills-lite)
 
 OpenClaw-only WEEX Trader Lite skill. The project keeps the formal Trader trading and market/account behavior and the complete saved-profile automated-strategy authorization path, while shipping no separate Analysis, Monitor, or Partner skills.
 

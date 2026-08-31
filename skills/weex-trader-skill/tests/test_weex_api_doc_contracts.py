@@ -165,6 +165,36 @@ class GeneratorRegressionTests(unittest.TestCase):
         self.assertEqual(parsed.body_fields, [])
         self.assertEqual(parsed.response_container, "conditional_object_or_array")
 
+    def test_spot_kline_override_adds_limit_from_official_request_example(self) -> None:
+        generator = load_generator()
+        html = """
+        <article>
+          <div class="theme-doc-markdown markdown">
+            <h1>Get Kline Data</h1>
+            <p>GET /api/v3/market/klines</p>
+            <p>Request parameters</p>
+            <table>
+              <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+              <tr><td>symbol</td><td>String</td><td>Yes</td><td>Trading pair</td></tr>
+              <tr><td>interval</td><td>String</td><td>Yes</td><td>Candlestick interval</td></tr>
+            </table>
+            <p>Request example</p>
+            <pre>curl "https://api-spot.weex.com/api/v3/market/klines?symbol=BTCUSDT&amp;interval=1m&amp;limit=3"</pre>
+            <p>Response example</p>
+            <pre>[]</pre>
+          </div>
+        </article>
+        """
+        with mock.patch.object(generator, "fetch_text", return_value=html):
+            parsed = generator.parse_doc(
+                "https://www.weex.com/api-doc/spot/MarketDataAPI/GetKLineData"
+            )
+        self.assertIsNotNone(parsed)
+        generator.apply_known_overrides("spot", [parsed])
+        assert parsed is not None
+        self.assertEqual(parsed.query_fields, ["symbol", "interval", "limit"])
+        self.assertEqual(parsed.request_params[-1]["name"], "limit")
+
     def test_url_collection_includes_tax_and_demo_pages_but_excludes_partner_pages(self) -> None:
         generator = load_generator()
         tax = "https://www.weex.com/api-doc/spot/tax/GetSpotAccountRecord"
@@ -222,6 +252,8 @@ class CheckedInDefinitionRegressionTests(unittest.TestCase):
         klines = by_key["spot.market.get_k_line_data"]
         interval = params_by_name(klines, "request_params")["interval"]["description"]
         self.assertNotIn("1M", interval)
+        self.assertIn("limit", klines["query_fields"])
+        self.assertEqual(params_by_name(klines, "request_params")["limit"]["required"], "No")
         self.assertEqual(set(params_by_name(klines, "response_params")), {str(index) for index in range(11)})
 
         exchange = by_key["spot.config.get_product_info"]

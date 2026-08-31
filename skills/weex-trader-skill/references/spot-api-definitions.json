@@ -1035,7 +1035,8 @@
       "request_transport": "query",
       "query_fields": [
         "symbol",
-        "interval"
+        "interval",
+        "limit"
       ],
       "body_fields": [],
       "request_params": [
@@ -1050,6 +1051,12 @@
           "type": "String",
           "required": "Yes",
           "description": "Candlestick interval (e.g. [1m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,1w])."
+        },
+        {
+          "name": "limit",
+          "type": "Integer",
+          "required": "No",
+          "description": "Number of klines to return; range 1-1000."
         }
       ],
       "response_container": "array",

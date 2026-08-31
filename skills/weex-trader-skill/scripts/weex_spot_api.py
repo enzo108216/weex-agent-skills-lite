@@ -429,6 +429,14 @@ def validate_endpoint_constraints(
             raise SystemExit("limit must be one of the documented values: 15 or 200") from exc
         if depth_limit not in {15, 200}:
             raise SystemExit("limit must be one of the documented values: 15 or 200")
+    if endpoint.key == "spot.market.get_k_line_data" and "limit" in query:
+        raw_limit = query["limit"]
+        raw_text = str(raw_limit).strip()
+        if isinstance(raw_limit, bool) or not raw_text or not raw_text.isdigit():
+            raise SystemExit("Invalid parameter 'limit'. Expected an integer.")
+        kline_limit = int(raw_text)
+        if not 1 <= kline_limit <= 1000:
+            raise SystemExit("limit must be between 1 and 1000.")
 
 
 def execute_endpoint(

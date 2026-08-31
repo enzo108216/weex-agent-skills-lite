@@ -497,6 +497,26 @@ def apply_known_overrides(product: str, docs: List[ParsedDoc]) -> None:
             target.response_params = [dict(row) for row in source.response_params]
 
     if product == "spot":
+        # The official Spot Kline page's request table omits `limit`, while
+        # its canonical curl example includes it and the endpoint validates
+        # the documented 1..1000 range. Keep regeneration aligned with that
+        # executable contract until the upstream table is corrected.
+        kline = find_doc(docs, "spot.market.get_k_line_data")
+        if kline is not None and "limit" not in kline.query_fields:
+            kline.query_fields.append("limit")
+            interval_index = next(
+                (index for index, row in enumerate(kline.request_params) if row.get("name") == "interval"),
+                len(kline.request_params) - 1,
+            )
+            kline.request_params.insert(
+                interval_index + 1,
+                {
+                    "name": "limit",
+                    "type": "Integer",
+                    "required": "No",
+                    "description": "Number of klines to return; range 1-1000.",
+                },
+            )
         api_symbols = find_doc(docs, "spot.config.get_api_trading_symbols")
         if api_symbols is not None and (
             not api_symbols.response_params or has_only_narrative_placeholder(api_symbols)

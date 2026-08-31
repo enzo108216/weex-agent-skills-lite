@@ -15,6 +15,27 @@ import weex_trade_data_aggregator  # noqa: E402
 
 
 class LimitContractTests(unittest.TestCase):
+    def test_spot_kline_limit_is_an_optional_query_field(self) -> None:
+        endpoint = weex_spot_api.ENDPOINTS["spot.market.get_k_line_data"]
+        self.assertIn("limit", endpoint.query_fields)
+        client = weex_spot_api.WeexSpotClient(
+            base_url="https://api-spot.weex.com",
+            timeout=5.0,
+            locale="en-US",
+            api_key=None,
+            api_secret=None,
+            api_passphrase=None,
+        )
+        client._validate_payload_fields(endpoint, {"symbol": "BTCUSDT", "interval": "1m", "limit": 3}, {})
+
+    def test_spot_kline_limit_validates_official_range(self) -> None:
+        endpoint = weex_spot_api.ENDPOINTS["spot.market.get_k_line_data"]
+        for value in (1, 3, 1000):
+            weex_spot_api.validate_endpoint_constraints(endpoint, {"limit": value}, {})
+        for value in (0, 1001, "abc", "3.5"):
+            with self.subTest(value=value), self.assertRaisesRegex(SystemExit, "limit"):
+                weex_spot_api.validate_endpoint_constraints(endpoint, {"limit": value}, {})
+
     def test_contract_depth_limit_accepts_only_documented_values(self) -> None:
         endpoint = weex_contract_api.ENDPOINTS["market.get_depth_data"]
         for value in (15, 200):

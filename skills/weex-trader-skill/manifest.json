@@ -4,7 +4,7 @@
     "name": "weex-trader-skill",
     "project": "weex-agent-skills-lite",
     "source_of_truth": "SKILL.md",
-    "purpose": "OpenClaw-only WEEX spot/futures trading, market/account queries, and complete automated-strategy authorization."
+    "purpose": "OpenClaw-only WEEX Spot/Futures trading, account queries, and automated-strategy authorization."
   },
   "path_policy": {
     "skill_root": ".",
@@ -16,9 +16,7 @@
     "open_if_needed": {
       "file_level_details": "file-index.json",
       "script_operations": "references/script-operations.md",
-      "trade_data_schema": "references/trade-data-schema.md",
       "auth_and_signing": "references/auth-and-signing.md",
-      "linux_vault": "references/linux-vault.md",
       "troubleshooting": "references/troubleshooting.md"
     }
   },
@@ -28,16 +26,18 @@
       "updater": "scripts/update_openclaw_skills.sh",
       "linked_skills": ["weex-trader-skill"]
     },
-    "other_hosts": {
-      "supported": false
-    }
+    "other_hosts": {"supported": false}
+  },
+  "credential_policy": {
+    "source": "runtime_environment_only",
+    "required_together": ["WEEX_API_KEY", "WEEX_API_SECRET", "WEEX_API_PASSPHRASE"],
+    "forbidden": ["argv", "json_payload", "saved_profile", "vault", "keychain"]
   },
   "routing": {
     "contract": {
       "entrypoint": "scripts/weex_contract_api.py",
       "definitions": "references/contract-api-definitions.json",
-      "commands": ["list-endpoints", "call", "place-order", "cancel-order", "ticker", "poll-ticker"],
-      "trading_mode": "real trading by default; demo only through official sim.* futures endpoints"
+      "commands": ["list-endpoints", "call", "place-order", "cancel-order", "ticker", "poll-ticker"]
     },
     "spot": {
       "entrypoint": "scripts/weex_spot_api.py",
@@ -54,17 +54,15 @@
       "runtime": "scripts/weex_auto_trade_runtime.py",
       "commands": ["register-strategy", "list-strategies", "retire-strategy", "ensure-authorization", "show-authorization-request", "grant-authorization", "list-authorizations", "revoke-authorization", "submit-auto", "resolve-auto-usage", "enable-auto-trading-after-restore", "reconcile-auto-order", "event-list", "snapshot-state", "restore-state"],
       "trading_mode": "real trading only",
-      "profile_policy": "saved profiles only"
+      "account_policy": "current environment account only"
     }
   },
   "excluded_capabilities": [
-    "analysis",
-    "account risk scan",
-    "deep risk analysis",
+    "saved profiles and vaults",
+    "analysis and replay",
+    "account risk reports",
     "monitor",
-    "PnL monitor and automatic-close orchestration",
     "partner",
-    "replay",
     "profile analysis",
     "non-OpenClaw host installation"
   ],
@@ -72,6 +70,6 @@
     "live_confirmation": "--confirm-live",
     "demo_confirmation": "--trading-mode demo --confirm-demo",
     "natural_language_orders": "preview before submit and exact independent confirmation",
-    "secret_transport": "saved profile/Vault or complete runtime environment; never argv"
+    "secret_transport": "runtime environment only; never argv or payload"
   }
 }

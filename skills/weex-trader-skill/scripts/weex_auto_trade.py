@@ -19,6 +19,7 @@ from weex_auto_trade_state import (
     StateConflictError,
     build_verified_usage_evidence,
 )
+from weex_agent_state import RuntimePreflightError, ensure_private_runtime_ready
 from weex_trade_guard import (
     _validate_official_order_semantics,
     resolve_official_auto_trade_operation,
@@ -50,12 +51,11 @@ SCOPE_FIELDS = frozenset(
     }
 )
 COMMAND_SCHEMAS: dict[str, tuple[set[str], set[str]]] = {
-    "register-strategy": ({"profile", "strategy_name"}, {"strategy_id"}),
-    "list-strategies": ({"profile"}, {"include_retired"}),
-    "retire-strategy": ({"profile", "strategy_id"}, set()),
+    "register-strategy": ({"strategy_name"}, {"strategy_id"}),
+    "list-strategies": (set(), {"include_retired"}),
+    "retire-strategy": ({"strategy_id"}, set()),
     "ensure-authorization": (
         {
-            "profile",
             "strategy_id",
             "trade_types",
             "symbols",
@@ -66,16 +66,15 @@ COMMAND_SCHEMAS: dict[str, tuple[set[str], set[str]]] = {
         },
         set(),
     ),
-    "show-authorization-request": ({"profile", "strategy_id", "request_id"}, set()),
+    "show-authorization-request": ({"strategy_id", "request_id"}, set()),
     "grant-authorization": (
-        {"profile", "strategy_id", "request_id", "scope_signature"},
+        {"strategy_id", "request_id", "scope_signature"},
         set(),
     ),
-    "list-authorizations": ({"profile"}, {"strategy_id"}),
-    "revoke-authorization": ({"profile", "strategy_id", "authorization_id"}, set()),
+    "list-authorizations": (set(), {"strategy_id"}),
+    "revoke-authorization": ({"strategy_id", "authorization_id"}, set()),
     "submit-auto": (
         {
-            "profile",
             "strategy_id",
             "authorization_id",
             "idempotency_key",
@@ -85,17 +84,17 @@ COMMAND_SCHEMAS: dict[str, tuple[set[str], set[str]]] = {
         set(),
     ),
     "resolve-auto-usage": (
-        {"profile", "strategy_id", "usage_id"},
+        {"strategy_id", "usage_id"},
         set(),
     ),
-    "enable-auto-trading-after-restore": ({"profile"}, set()),
+    "enable-auto-trading-after-restore": (set(), set()),
     "reconcile-auto-order": (
-        {"profile", "strategy_id", "auto_trade_order_id"},
+        {"strategy_id", "auto_trade_order_id"},
         set(),
     ),
-    "event-list": ({"profile", "strategy_id"}, set()),
-    "snapshot-state": ({"profile"}, {"retention_count"}),
-    "restore-state": ({"profile", "snapshot_id"}, set()),
+    "event-list": ({"strategy_id"}, set()),
+    "snapshot-state": (set(), {"retention_count"}),
+    "restore-state": ({"snapshot_id"}, set()),
 }
 
 
@@ -119,8 +118,8 @@ class AutoTradeFacade:
         self,
         state: AutoTradeState,
         *,
-        profile_resolver: Callable[[str], Any],
-        auto_trade_runtime_factory: Callable[[Any], Any] | None = None,
+        account_resolver: Callable[[], Any],
+        auto_trade_runtime_factory: Callable[[str], Any] | None = None,
         reconciliation_provider: Callable[[dict[str, Any], Any], dict[str, Any]] | None = None,
         usage_resolution_provider: Callable[[dict[str, Any], Any], dict[str, Any]] | None = None,
         manual_intent_writer: Callable[[dict[str, Any]], Any] | None = None,
@@ -128,7 +127,7 @@ class AutoTradeFacade:
         notification_worker_launcher: Callable[..., Any] | None = None,
     ) -> None:
         self.state = state
-        self.profile_resolver = profile_resolver
+        self.account_resolver = account_resolver
         self.auto_trade_runtime_factory = auto_trade_runtime_factory
         self.reconciliation_provider = reconciliation_provider
         self.usage_resolution_provider = usage_resolution_provider
@@ -215,69 +214,75 @@ class AutoTradeFacade:
             # Worker launch is best-effort and cannot change a committed order result.
             return
 
-    def _profile(self, payload: dict[str, Any]) -> Any:
-        profile_name = _required_text(payload.get("profile"), "profile")
+    def _account(self) -> Any:
         try:
-            profile = self.profile_resolver(profile_name)
-        except Exception as exc:
-            raise FacadeError("UNKNOWN_PROFILE", "saved profile was not found", "SELECT_SAVED_PROFILE") from exc
-        if profile is None:
-            raise FacadeError("UNKNOWN_PROFILE", "saved profile was not found", "SELECT_SAVED_PROFILE")
-        return profile
+            account = self.account_resolver()
+        except (Exception, SystemExit) as exc:
+            raise FacadeError(
+                "ENVIRONMENT_CREDENTIALS_UNAVAILABLE",
+                "complete WEEX environment credentials are required",
+                "CONFIGURE_ENVIRONMENT_CREDENTIALS",
+            ) from exc
+        if account is None or not getattr(account, "account_id", None):
+            raise FacadeError(
+                "ENVIRONMENT_CREDENTIALS_UNAVAILABLE",
+                "complete WEEX environment credentials are required",
+                "CONFIGURE_ENVIRONMENT_CREDENTIALS",
+            )
+        return account
 
-    def _assert_strategy_profile(self, strategy_id: str, profile: Any) -> dict[str, str]:
+    def _assert_strategy_account(self, strategy_id: str, account: Any) -> dict[str, str]:
         strategy = self.state.get_strategy(strategy_id=strategy_id)
-        if strategy["profile_id"] != profile.profile_id:
+        if strategy["profile_id"] != account.account_id:
             raise FacadeError(
                 "STRATEGY_AUTHORIZATION_MISMATCH",
-                "strategy does not belong to the selected saved profile",
-                "SELECT_MATCHING_PROFILE",
+                "strategy does not belong to the current environment account",
+                "USE_MATCHING_ENVIRONMENT_ACCOUNT",
             )
         return strategy
 
     def _register_strategy(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
-        _strict_fields(payload, required={"profile", "strategy_name"}, optional={"strategy_id"})
-        profile = self._profile(payload)
+        _strict_fields(payload, required={"strategy_name"}, optional={"strategy_id"})
+        account = self._account()
         result = self.state.register_strategy(
-            profile_id=profile.profile_id,
+            profile_id=account.account_id,
             strategy_name=_required_text(payload["strategy_name"], "strategy_name"),
             distribution="official",
             trading_mode="live",
             strategy_id=payload.get("strategy_id"),
         )
-        return _public_strategy(result, profile.name)
+        return _public_strategy(result)
 
     def _list_strategies(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
-        _strict_fields(payload, required={"profile"}, optional={"include_retired"})
-        profile = self._profile(payload)
+        _strict_fields(payload, required=set(), optional={"include_retired"})
+        account = self._account()
         include_retired = payload.get("include_retired", True)
         if not isinstance(include_retired, bool):
             raise FacadeError("INVALID_REQUEST", "include_retired must be a boolean", "FIX_REQUEST")
         return {
             "ok": True,
-            "profile": profile.name,
+            "credential_source": "environment",
             "strategies": [
-                _public_strategy(item, profile.name)
+                _public_strategy(item)
                 for item in self.state.list_strategies(
-                    profile_id=profile.profile_id,
+                    profile_id=account.account_id,
                     include_retired=include_retired,
                 )
             ],
         }
 
     def _retire_strategy(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
-        _strict_fields(payload, required={"profile", "strategy_id"})
-        profile = self._profile(payload)
+        _strict_fields(payload, required={"strategy_id"})
+        account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
-        self._assert_strategy_profile(strategy_id, profile)
+        self._assert_strategy_account(strategy_id, account)
         result = self.state.retire_strategy(strategy_id=strategy_id)
-        return _public_strategy(result, profile.name)
+        return _public_strategy(result)
 
     def _ensure_authorization(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
         _strict_fields(
             payload,
             required={
-                "profile",
                 "strategy_id",
                 "trade_types",
                 "symbols",
@@ -288,12 +293,12 @@ class AutoTradeFacade:
             },
             optional=set(),
         )
-        profile = self._profile(payload)
+        account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
-        self._assert_strategy_profile(strategy_id, profile)
+        self._assert_strategy_account(strategy_id, account)
         scope = {key: payload[key] for key in SCOPE_FIELDS if key in payload}
         result = self.state.ensure_authorization(strategy_id=strategy_id, scope=scope)
-        return {**result, "profile": profile.name}
+        return {**result, "credential_source": "environment"}
 
     def _show_authorization_request(
         self,
@@ -301,17 +306,17 @@ class AutoTradeFacade:
         *,
         confirm_live: bool,
     ) -> dict[str, Any]:
-        _strict_fields(payload, required={"profile", "strategy_id", "request_id"})
-        profile = self._profile(payload)
+        _strict_fields(payload, required={"strategy_id", "request_id"})
+        account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
-        strategy = self._assert_strategy_profile(strategy_id, profile)
+        strategy = self._assert_strategy_account(strategy_id, account)
         request = self.state.get_authorization_request(
             strategy_id=strategy_id,
             request_id=_required_text(payload["request_id"], "request_id"),
         )
         request_status = request["request_status"]
         confirmation = {
-            "profile": profile.name,
+            "credential_source": "environment",
             "trading_mode": "live",
             "strategy_name": strategy["strategy_name"],
             "strategy_id": _mask_identifier(strategy_id),
@@ -329,7 +334,7 @@ class AutoTradeFacade:
             "revoke_command": "weex_auto_trade.py revoke-authorization --input -",
             "trust_boundary": (
                 "Local same-OS-user misuse guard; not identity authentication and not protection "
-                "against an attacker controlling the same OS user, Agent, Vault session, or API key."
+                "against an attacker controlling the same OS user, Agent, process environment, or API key."
             ),
         }
         if request_status == "PENDING":
@@ -378,40 +383,40 @@ class AutoTradeFacade:
     def _grant_authorization(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
         _strict_fields(
             payload,
-            required={"profile", "strategy_id", "request_id", "scope_signature"},
+            required={"strategy_id", "request_id", "scope_signature"},
         )
-        profile = self._profile(payload)
+        account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
-        self._assert_strategy_profile(strategy_id, profile)
+        self._assert_strategy_account(strategy_id, account)
         result = self.state.grant_authorization(
             strategy_id=strategy_id,
             request_id=_required_text(payload["request_id"], "request_id"),
             scope_signature=_required_text(payload["scope_signature"], "scope_signature"),
             confirm_live=confirm_live,
         )
-        return {**result, "profile": profile.name}
+        return {**result, "credential_source": "environment"}
 
     def _revoke_authorization(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
-        _strict_fields(payload, required={"profile", "strategy_id", "authorization_id"})
-        profile = self._profile(payload)
+        _strict_fields(payload, required={"strategy_id", "authorization_id"})
+        account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
-        self._assert_strategy_profile(strategy_id, profile)
+        self._assert_strategy_account(strategy_id, account)
         result = self.state.revoke_authorization(
             strategy_id=strategy_id,
             authorization_id=_required_text(payload["authorization_id"], "authorization_id"),
         )
-        return {**result, "profile": profile.name}
+        return {**result, "credential_source": "environment"}
 
     def _list_authorizations(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
-        _strict_fields(payload, required={"profile"}, optional={"strategy_id"})
-        profile = self._profile(payload)
+        _strict_fields(payload, required=set(), optional={"strategy_id"})
+        account = self._account()
         strategy_id = payload.get("strategy_id")
         if strategy_id is not None:
             strategy_id = _required_text(strategy_id, "strategy_id")
-            self._assert_strategy_profile(strategy_id, profile)
+            self._assert_strategy_account(strategy_id, account)
         allowed_strategy_ids = {
             strategy["strategy_id"]
-            for strategy in self.state.list_strategies(profile_id=profile.profile_id)
+            for strategy in self.state.list_strategies(profile_id=account.account_id)
         }
         authorizations = [
             item
@@ -420,7 +425,7 @@ class AutoTradeFacade:
         ]
         return {
             "ok": True,
-            "profile": profile.name,
+            "credential_source": "environment",
             "authorizations": [
                 {**item, "authorization_id": _mask_identifier(item["authorization_id"])}
                 for item in authorizations
@@ -428,10 +433,10 @@ class AutoTradeFacade:
         }
 
     def _event_list(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
-        _strict_fields(payload, required={"profile", "strategy_id"})
-        profile = self._profile(payload)
+        _strict_fields(payload, required={"strategy_id"})
+        account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
-        self._assert_strategy_profile(strategy_id, profile)
+        self._assert_strategy_account(strategy_id, account)
         events = self.state.list_events(strategy_id=strategy_id)
         authorization_totals = {
             item["authorization_id"]: item["scope"]["max_total_amount"]
@@ -439,7 +444,7 @@ class AutoTradeFacade:
         }
         return {
             "ok": True,
-            "profile": profile.name,
+            "credential_source": "environment",
             "strategy_id": _mask_identifier(strategy_id),
             "events": [
                 _public_event(
@@ -454,9 +459,9 @@ class AutoTradeFacade:
 
     def _submit_auto(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
         _strict_fields(payload, required=COMMAND_SCHEMAS["submit-auto"][0])
-        profile = self._profile(payload)
+        account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
-        self._assert_strategy_profile(strategy_id, profile)
+        self._assert_strategy_account(strategy_id, account)
         authorization_id = _required_text(
             payload["authorization_id"], "authorization_id"
         )
@@ -468,7 +473,7 @@ class AutoTradeFacade:
 
         runtime_factory = self.auto_trade_runtime_factory or _load_auto_trade_runtime_factory()
         try:
-            runtime = runtime_factory(profile)
+            runtime = runtime_factory(account.account_id)
         except FacadeError:
             raise
         except SystemExit:
@@ -505,7 +510,7 @@ class AutoTradeFacade:
                     confirm_live=confirm_live,
                 )
             except SystemExit:
-                # Profile/Vault setup failures are read-time runtime
+                # Environment setup failures are read-time runtime
                 # unavailability, not evidence that a write was attempted.
                 # Keep the facade's JSON contract stable and route to the
                 # normal manual-confirmation fallback.
@@ -563,7 +568,7 @@ class AutoTradeFacade:
                 advisory_alerts=list(result.get("advisory_alerts") or []),
             )
             intent = _build_manual_fallback_intent(
-                profile_name=profile.name,
+                account_id=account.account_id,
                 strategy_id=strategy_id,
                 authorization_id=authorization_id,
                 idempotency_key=idempotency_key,
@@ -615,7 +620,6 @@ class AutoTradeFacade:
                     result["authorization_hint"] = authorization_hint
         return _public_auto_result(
             result,
-            profile_name=profile.name,
             strategy_id=strategy_id,
             authorization_id=authorization_id,
         )
@@ -623,9 +627,9 @@ class AutoTradeFacade:
     def _reconcile_auto_order(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
         required = COMMAND_SCHEMAS["reconcile-auto-order"][0]
         _strict_fields(payload, required=required)
-        profile = self._profile(payload)
+        account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
-        self._assert_strategy_profile(strategy_id, profile)
+        self._assert_strategy_account(strategy_id, account)
         auto_trade_order_id = _required_text(
             payload["auto_trade_order_id"], "auto_trade_order_id"
         )
@@ -638,7 +642,7 @@ class AutoTradeFacade:
             )
         provider = self.reconciliation_provider or _load_reconciliation_provider()
         try:
-            facts = provider(current_order, profile)
+            facts = provider(current_order, account)
         except Exception:
             facts = {
                 "reconciliation_status": "UNAVAILABLE",
@@ -674,14 +678,14 @@ class AutoTradeFacade:
             fee_asset=facts["fee_asset"],
             reconciliation_source=facts["reconciliation_source"],
         )
-        return _public_reconciliation_result(result, profile_name=profile.name)
+        return _public_reconciliation_result(result)
 
     def _resolve_auto_usage(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
         required, optional = COMMAND_SCHEMAS["resolve-auto-usage"]
         _strict_fields(payload, required=required, optional=optional)
-        profile = self._profile(payload)
+        account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
-        self._assert_strategy_profile(strategy_id, profile)
+        self._assert_strategy_account(strategy_id, account)
         if confirm_live is not True:
             raise FacadeError(
                 "LIVE_CONFIRMATION_REQUIRED",
@@ -705,7 +709,7 @@ class AutoTradeFacade:
             )
         provider = self.usage_resolution_provider or _load_usage_resolution_provider()
         try:
-            facts = provider(current_order, profile)
+            facts = provider(current_order, account)
             verified_evidence = build_verified_usage_evidence(facts)
         except Exception as exc:
             if isinstance(exc, FacadeError):
@@ -735,7 +739,7 @@ class AutoTradeFacade:
             raise FacadeError(code, str(exc), "INSPECT_OFFICIAL_QUERY") from exc
         return {
             **_public_usage_amounts(result),
-            "profile": profile.name,
+            "credential_source": "environment",
             "strategy_id": _mask_identifier(result["strategy_id"]),
             "authorization_id": _mask_identifier(result["authorization_id"]),
         }
@@ -746,14 +750,14 @@ class AutoTradeFacade:
         *,
         confirm_live: bool,
     ) -> dict[str, Any]:
-        _strict_fields(payload, required={"profile"})
-        profile = self._profile(payload)
+        _strict_fields(payload, required=set())
+        self._account()
         result = self.state.enable_auto_trading_after_restore(confirm_live=confirm_live)
-        return {**result, "profile": profile.name}
+        return {**result, "credential_source": "environment"}
 
     def _snapshot_state(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
-        _strict_fields(payload, required={"profile"}, optional={"retention_count"})
-        profile = self._profile(payload)
+        _strict_fields(payload, required=set(), optional={"retention_count"})
+        self._account()
         retention_count = payload.get("retention_count", 10)
         if (
             isinstance(retention_count, bool)
@@ -766,30 +770,30 @@ class AutoTradeFacade:
                 "FIX_REQUEST",
             )
         result = self.state.snapshot_state(retention_count=retention_count)
-        return {**result, "profile": profile.name}
+        return {**result, "credential_source": "environment"}
 
     def _restore_state(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
-        _strict_fields(payload, required={"profile", "snapshot_id"})
-        profile = self._profile(payload)
+        _strict_fields(payload, required={"snapshot_id"})
+        self._account()
         result = self.state.restore_state(
             snapshot_id=_required_text(payload["snapshot_id"], "snapshot_id")
         )
-        return {**result, "profile": profile.name}
+        return {**result, "credential_source": "environment"}
 
 
-def _load_profile_resolver() -> Callable[[str], Any]:
+def _load_account_resolver() -> Callable[[], Any]:
     try:
-        from weex_profile_store import resolve_profile
+        from weex_api_credentials import load_environment_account
     except (ImportError, ModuleNotFoundError) as exc:
         raise FacadeError(
             "RUNTIME_UNAVAILABLE",
-            "saved profile metadata runtime is unavailable",
+            "environment credential runtime is unavailable",
             "RUN_RUNTIME_SETUP",
         ) from exc
-    return resolve_profile
+    return load_environment_account
 
 
-def _load_auto_trade_runtime_factory() -> Callable[[Any], Any]:
+def _load_auto_trade_runtime_factory() -> Callable[[str], Any]:
     try:
         from weex_auto_trade_runtime import OfficialAutoTradeRuntime
     except (ImportError, ModuleNotFoundError) as exc:
@@ -798,7 +802,7 @@ def _load_auto_trade_runtime_factory() -> Callable[[Any], Any]:
             "official automated-trading runtime is unavailable",
             "RUN_RUNTIME_SETUP",
         ) from exc
-    return lambda profile: OfficialAutoTradeRuntime(profile_name=profile.name)
+    return lambda account_id: OfficialAutoTradeRuntime(expected_account_id=account_id)
 
 
 def _load_reconciliation_provider() -> Callable[[dict[str, Any], Any], dict[str, Any]]:
@@ -810,9 +814,9 @@ def _load_reconciliation_provider() -> Callable[[dict[str, Any], Any], dict[str,
             "official order reconciliation runtime is unavailable",
             "RUN_RUNTIME_SETUP",
         ) from exc
-    return lambda order, profile: query_official_order_facts(
+    return lambda order, account: query_official_order_facts(
         order=order,
-        profile_name=profile.name,
+        expected_account_id=account.account_id,
     )
 
 
@@ -825,15 +829,15 @@ def _load_usage_resolution_provider() -> Callable[[dict[str, Any], Any], dict[st
             "official order resolution runtime is unavailable",
             "RUN_RUNTIME_SETUP",
         ) from exc
-    return lambda order, profile: query_official_usage_resolution(
+    return lambda order, account: query_official_usage_resolution(
         order=order,
-        profile_name=profile.name,
+        expected_account_id=account.account_id,
     )
 
 
 def _build_manual_fallback_intent(
     *,
-    profile_name: str,
+    account_id: str,
     strategy_id: str,
     authorization_id: str,
     idempotency_key: str,
@@ -878,7 +882,7 @@ def _build_manual_fallback_intent(
         "blocking_reasons": list(guard_result.get("blocking_reasons") or []),
     }
     intent = build_intent(
-        profile_name=profile_name,
+        account_id=account_id,
         market=market,
         trading_mode="live",
         order_preview=preview,
@@ -911,7 +915,6 @@ def _save_manual_fallback_intent(intent: dict[str, Any]) -> None:
 def _public_auto_result(
     result: dict[str, Any],
     *,
-    profile_name: str,
     strategy_id: str,
     authorization_id: str,
 ) -> dict[str, Any]:
@@ -936,7 +939,7 @@ def _public_auto_result(
         )
     return {
         **public_result,
-        "profile": profile_name,
+        "credential_source": "environment",
         "strategy_id": _mask_identifier(strategy_id),
         "authorization_id": _mask_identifier(authorization_id),
         "legs": public_legs,
@@ -945,8 +948,6 @@ def _public_auto_result(
 
 def _public_reconciliation_result(
     result: dict[str, Any],
-    *,
-    profile_name: str,
 ) -> dict[str, Any]:
     public = dict(result)
     authorization_quota = {
@@ -956,19 +957,19 @@ def _public_reconciliation_result(
     }
     return {
         **public,
-        "profile": profile_name,
+        "credential_source": "environment",
         "authorization_id": _mask_identifier(result["authorization_id"]),
         "authorization_quota": authorization_quota,
     }
 
 
-def _public_strategy(result: dict[str, str], profile_name: str) -> dict[str, Any]:
+def _public_strategy(result: dict[str, str]) -> dict[str, Any]:
     return {
         "ok": True,
         "strategy_id": result["strategy_id"],
         "strategy_name": result["strategy_name"],
         "status": result["status"],
-        "profile": profile_name,
+        "credential_source": "environment",
         "distribution": result["distribution"],
         "trading_mode": result["trading_mode"],
         "created_at": result["created_at"],
@@ -1036,7 +1037,7 @@ def _reject_raw_credentials(value: Any) -> None:
                 raise FacadeError(
                     "RAW_CREDENTIALS_NOT_ALLOWED",
                     "raw credentials are not accepted by automated-trading commands",
-                    "USE_SAVED_PROFILE",
+                    "USE_ENVIRONMENT_CREDENTIALS",
                 )
             _reject_raw_credentials(child)
     elif isinstance(value, list):
@@ -1174,22 +1175,34 @@ def main(argv: list[str] | None = None) -> int:
         payload = _load_input(args.input)
         _reject_raw_credentials(payload)
         _validate_command_payload(args.command, payload)
-        profile_resolver = _load_profile_resolver()
         try:
-            resolved_profile = profile_resolver(_required_text(payload.get("profile"), "profile"))
+            ensure_private_runtime_ready(
+                command=f"auto-trade.{args.command}",
+                auto_setup=True,
+                language=None,
+            )
+        except RuntimePreflightError as exc:
+            raise FacadeError(
+                "RUNTIME_UNAVAILABLE",
+                "automated-trading runtime environment is invalid or incomplete",
+                "FIX_RUNTIME_ENVIRONMENT",
+            ) from exc
+        account_resolver = _load_account_resolver()
+        try:
+            resolved_account = account_resolver()
         except FacadeError:
             raise
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
             raise FacadeError(
-                "UNKNOWN_PROFILE",
-                "saved profile was not found",
-                "SELECT_SAVED_PROFILE",
+                "ENVIRONMENT_CREDENTIALS_UNAVAILABLE",
+                "complete WEEX environment credentials are required",
+                "CONFIGURE_ENVIRONMENT_CREDENTIALS",
             ) from exc
-        if resolved_profile is None:
+        if resolved_account is None:
             raise FacadeError(
-                "UNKNOWN_PROFILE",
-                "saved profile was not found",
-                "SELECT_SAVED_PROFILE",
+                "ENVIRONMENT_CREDENTIALS_UNAVAILABLE",
+                "complete WEEX environment credentials are required",
+                "CONFIGURE_ENVIRONMENT_CREDENTIALS",
             )
         state = AutoTradeState(state_db_path())
         notification_adapter = None
@@ -1208,7 +1221,7 @@ def main(argv: list[str] | None = None) -> int:
                 notification_worker_launcher = None
         facade = AutoTradeFacade(
             state,
-            profile_resolver=profile_resolver,
+            account_resolver=account_resolver,
             notification_adapter=notification_adapter,
             notification_worker_launcher=notification_worker_launcher,
         )

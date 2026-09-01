@@ -24,6 +24,19 @@ import weex_spot_api  # noqa: E402
 
 
 class TradeGuardRegressionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.environment = {
+            "WEEX_API_KEY": "test-api-key",
+            "WEEX_API_SECRET": "test-api-secret",
+            "WEEX_API_PASSPHRASE": "test-api-passphrase",
+        }
+        self.environment_patch = mock.patch.dict(os.environ, self.environment, clear=False)
+        self.environment_patch.start()
+        self.account_id = weex_trade_guard._current_environment_account_id()
+
+    def tearDown(self) -> None:
+        self.environment_patch.stop()
+
     @staticmethod
     def _spot_preview_payload_from_raw(raw_order: dict[str, object]) -> dict[str, object]:
         order_type = str(raw_order.get("order_type") or raw_order.get("type") or "").upper()
@@ -138,7 +151,6 @@ class TradeGuardRegressionTests(unittest.TestCase):
         with mock.patch.object(weex_trade_guard, "_build_contract_client", return_value=(api, Client())):
             result = weex_trade_guard._submit_order(
                 market="futures",
-                profile_name="profile",
                 trading_mode="live",
                 raw_order={
                     "symbol": "BTCUSDT",
@@ -186,7 +198,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
             weex_trade_guard, "_build_contract_client", return_value=(api, object())
         ):
             result = weex_trade_guard._submit_order(
-                market="futures", profile_name="p", trading_mode="live", raw_order=order
+                market="futures", trading_mode="live", raw_order=order
             )
         self.assertEqual(result["orderId"], "close-1")
 
@@ -466,7 +478,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
             os.environ["WEEX_TRADER_SKILL_HOME"] = tempdir
             try:
                 intent = weex_order_intent_state.build_intent(
-                    profile_name="profile",
+                    account_id=self.account_id,
                     market="futures",
                     trading_mode="live",
                     environment={"trading_mode": "live", "market": "futures", "uses_real_funds": True},
@@ -502,6 +514,37 @@ class TradeGuardRegressionTests(unittest.TestCase):
                     os.environ.pop("WEEX_TRADER_SKILL_HOME", None)
                 else:
                     os.environ["WEEX_TRADER_SKILL_HOME"] = old_home
+
+    def test_confirm_rejects_when_environment_account_changed_after_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            with mock.patch.dict(os.environ, {"WEEX_TRADER_SKILL_HOME": tempdir}, clear=False):
+                intent = weex_order_intent_state.build_intent(
+                    account_id=self.account_id,
+                    market="futures",
+                    trading_mode="live",
+                    environment={"trading_mode": "live", "market": "futures", "uses_real_funds": True},
+                    order_preview={"market": "futures", "symbol": "BTCUSDT"},
+                    raw_order={"symbol": "BTCUSDT", "side": "BUY", "positionSide": "LONG", "type": "MARKET", "quantity": "1"},
+                    analysis_output={"alerts": [], "partial": False, "degraded_reasons": [], "constraints": []},
+                    confirmation_reply_text="确认",
+                    confirmation_language="zh",
+                    freshness_required=False,
+                )
+                weex_order_intent_state.save_intent(intent)
+                args = argparse.Namespace(
+                    intent_id=intent["intent_id"],
+                    risk_signature=intent["risk_signature"],
+                    trading_mode="live",
+                    confirm_live=True,
+                    confirm_demo=False,
+                    user_reply="确认",
+                    language="zh",
+                    pretty=False,
+                )
+                with mock.patch.dict(os.environ, {"WEEX_API_KEY": "different-api-key"}, clear=False):
+                    with mock.patch.object(weex_trade_guard, "_submit_live_order") as submitter:
+                        self.assertEqual(weex_trade_guard.cmd_confirm_order(args), 1)
+                submitter.assert_not_called()
 
     def test_limit_confirm_still_rejects_changed_account_or_market_facts(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -607,7 +650,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
                     "price": "100",
                 }
                 intent = weex_order_intent_state.build_intent(
-                    profile_name="profile",
+                    account_id=self.account_id,
                     market="spot",
                     trading_mode="live",
                     environment={"trading_mode": "live", "market": "spot", "uses_real_funds": True},
@@ -627,7 +670,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
                 # The signature is intentionally recomputed after adding the
                 # fallback metadata, matching how the facade persists it.
                 intent["risk_signature"] = weex_order_intent_state.build_risk_signature(
-                    profile_name=intent["profile_name"],
+                    account_id=intent["account_id"],
                     market=intent["market"],
                     trading_mode=intent["trading_mode"],
                     order_preview=intent["order_preview"],
@@ -689,7 +732,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
             os.environ["WEEX_TRADER_SKILL_HOME"] = tempdir
             try:
                 intent = weex_order_intent_state.build_intent(
-                    profile_name="profile",
+                    account_id=self.account_id,
                     market="futures",
                     trading_mode="live",
                     environment={"trading_mode": "live", "market": "futures", "uses_real_funds": True},
@@ -816,9 +859,13 @@ class TradeGuardRegressionTests(unittest.TestCase):
                 intent = weex_order_intent_state.load_intent()
                 confirm_args = argparse.Namespace(
                     profile="profile", intent_id=intent["intent_id"], risk_signature=intent["risk_signature"],
-                    user_reply="确认", pretty=False,
+                    user_reply="确认", confirm_live=False, pretty=False,
                 )
                 api = FakeApi()
+                with mock.patch.object(weex_trade_guard, "_build_contract_client", return_value=(api, object())):
+                    self.assertEqual(weex_trade_guard.cmd_confirm_cancel(confirm_args, now_ms=1001), 1)
+                self.assertFalse(hasattr(api, "kwargs"))
+                confirm_args.confirm_live = True
                 with mock.patch.object(weex_trade_guard, "_build_contract_client", return_value=(api, object())):
                     self.assertEqual(weex_trade_guard.cmd_confirm_cancel(confirm_args, now_ms=1001), 0)
                 self.assertEqual(api.kwargs["endpoint_key"], "transaction.cancel_order")
@@ -852,10 +899,10 @@ class TradeGuardRegressionTests(unittest.TestCase):
         order = {"symbol": "BTCUSDT", "side": "BUY", "positionSide": "LONG", "type": "MARKET", "quantity": "1"}
         with mock.patch.object(weex_trade_guard, "_build_contract_client", return_value=(api, Client({"ok": True, "status": 200, "data": {"code": -1, "msg": "rejected"}}))):
             with self.assertRaises(weex_trade_guard.AggregationInputError):
-                weex_trade_guard._submit_order(market="futures", profile_name="p", trading_mode="live", raw_order=order)
+                weex_trade_guard._submit_order(market="futures", trading_mode="live", raw_order=order)
         with mock.patch.object(weex_trade_guard, "_build_contract_client", return_value=(api, Client({"ok": False, "status": None, "error": {"message": "timeout"}}))):
             with self.assertRaises(weex_trade_guard.SubmissionUncertainError):
-                weex_trade_guard._submit_order(market="futures", profile_name="p", trading_mode="live", raw_order=order)
+                weex_trade_guard._submit_order(market="futures", trading_mode="live", raw_order=order)
 
     def test_spot_private_mode_is_explicit_and_payload_schema_is_enforced(self) -> None:
         with self.assertRaises(SystemExit):
@@ -876,15 +923,10 @@ class TradeGuardRegressionTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             weex_contract_api.normalize_trading_mode(None, required=True)
 
-    def test_trade_guard_resolves_default_profile_when_environment_is_empty(self) -> None:
-        profile = types.SimpleNamespace(name="default", contract_base_url="https://api-contract.weex.com", spot_base_url="https://api-spot.weex.com")
-        with mock.patch.object(weex_contract_api, "load_environment_credentials", return_value=None), mock.patch.object(
-            weex_contract_api, "resolve_runtime_profile", return_value=profile
-        ), mock.patch.object(weex_contract_api, "ensure_private_runtime_ready"), mock.patch.object(
-            weex_contract_api, "require_private_profile"
-        ):
-            _api, client = weex_trade_guard._build_contract_client(None)
-        self.assertEqual(client.profile_name, "default")
+    def test_trade_guard_fails_closed_when_environment_credentials_are_empty(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(SystemExit, "required"):
+                weex_trade_guard._build_contract_client()
 
     def test_empty_spot_balances_are_marked_partial(self) -> None:
         class Fetcher:

@@ -16,25 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from weex_gui_bootstrap import (
-    BOOTSTRAP_DISABLE_ENV,
-    _localized as gui_bootstrap_localized,
-    managed_runtime_setup_command,
-    managed_venv_python,
-    probe_runtime,
-    requirements_lock_path,
-)
-from weex_profile_language import resolve_language_with_source
+from weex_language import resolve_language_with_source
 from weex_url_policy import BaseUrlPolicyError, validate_weex_base_url
 
 
 CONFIG_HOME_ENV = "WEEX_TRADER_SKILL_HOME"
-METADATA_FILENAME = "profiles.meta.json"
-VAULT_CONFIG_FILENAME = "vault.config.json"
-VAULT_SESSION_FILENAME = "vault.session.json"
 AGENT_INIT_FILENAME = "agent-init.json"
 AGENT_RUNTIME_FILENAME = "agent-runtime.json"
-REQUIRED_MODULES = ("cryptography", "requests")
+REQUIRED_MODULES = ("requests",)
 RUNTIME_ENV_VARS = (
     "WEEX_API_KEY",
     "WEEX_API_SECRET",
@@ -77,18 +66,6 @@ def config_dir() -> Path:
     return Path.home() / ".weex-trader-skill"
 
 
-def metadata_path() -> Path:
-    return config_dir() / METADATA_FILENAME
-
-
-def vault_config_path() -> Path:
-    return config_dir() / VAULT_CONFIG_FILENAME
-
-
-def vault_session_path() -> Path:
-    return config_dir() / VAULT_SESSION_FILENAME
-
-
 def agent_init_path() -> Path:
     return config_dir() / AGENT_INIT_FILENAME
 
@@ -99,6 +76,10 @@ def agent_runtime_path() -> Path:
 
 def requirements_path() -> Path:
     return Path(__file__).resolve().parent.parent / "requirements.txt"
+
+
+def requirements_lock_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "requirements.lock"
 
 
 def runtime_setup_script_path() -> Path:
@@ -152,195 +133,8 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
                 pass
 
 
-def _load_json(path: Path) -> Optional[dict[str, Any]]:
-    if not path.exists():
-        return None
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return raw if isinstance(raw, dict) else None
-
-
-def _load_store_module() -> Any:
-    try:
-        return importlib.import_module("weex_profile_store")
-    except Exception:
-        return None
-
-
-def _detect_tkinter_available(os_family: str) -> tuple[bool, Optional[dict[str, Any]]]:
-    if os_family not in {"Windows", "Darwin"}:
-        try:
-            import tkinter  # noqa: F401
-        except Exception:
-            return False, None
-        return True, None
-    probe = probe_runtime(sys.executable)
-    return probe.usable, probe.to_dict()
-
-
-def _prepare_gui_runtime(
-    os_family: str,
-    language: str,
-    *,
-    tkinter_available: bool,
-) -> Optional[dict[str, Any]]:
-    if os_family not in {"Windows", "Darwin"}:
-        return None
-
-    disabled = os.getenv(BOOTSTRAP_DISABLE_ENV) == "1"
-    payload: dict[str, Any] = {
-        "available": True,
-        "disabled": disabled,
-        "attempted": False,
-        "ready": False,
-        "action": None,
-        "requires_user_consent": False,
-        "setup_command": managed_runtime_setup_command(os_family),
-        "managed_python_executable": None,
-        "managed_probe": None,
-        "error": None,
-    }
-    if disabled:
-        return payload
-
-    runtime_python = managed_venv_python()
-    if not runtime_python.exists():
-        payload["ready"] = False
-        payload["action"] = "explicit_setup_required"
-        payload["requires_user_consent"] = True
-        payload["error"] = gui_bootstrap_localized(language, "explicit_runtime_required")
-        return payload
-
-    managed_probe = probe_runtime(str(runtime_python))
-    if not managed_probe.usable:
-        payload["ready"] = False
-        payload["action"] = "explicit_setup_required"
-        payload["requires_user_consent"] = True
-        payload["managed_python_executable"] = str(runtime_python)
-        payload["managed_probe"] = managed_probe.to_dict()
-        payload["error"] = (
-            f"{gui_bootstrap_localized(language, 'explicit_runtime_required')}\n"
-            f"{managed_probe.summary(language)}"
-        )
-        return payload
-
-    payload["ready"] = True
-    payload["action"] = "reused"
-    payload["managed_python_executable"] = str(runtime_python)
-    payload["managed_probe"] = managed_probe.to_dict()
-    return payload
-
-
-def _detect_interaction_mode(os_family: str) -> str:
-    if os_family == "Linux":
-        if any(os.getenv(name) for name in ("DISPLAY", "WAYLAND_DISPLAY")):
-            return "linux_interactive"
-        return "headless_server"
-    if os_family in {"Windows", "Darwin"}:
-        return "desktop_interactive"
-    return "terminal_only"
-
-
-def _detect_gui_available(
-    os_family: str,
-    tkinter_available: bool,
-    gui_runtime: Optional[dict[str, Any]],
-) -> bool:
-    del tkinter_available
-    if os_family in {"Windows", "Darwin"}:
-        return bool((gui_runtime or {}).get("ready"))
-    return False
-
-
 def _launcher_for_os(os_family: str) -> str:
     return "py -3" if os_family == "Windows" else "python3"
-
-
-def _route_profile_management(os_family: str, language: str, gui_available: bool, interaction_mode: str) -> str:
-    # The Lite package ships only the portable profile CLI.  Keep the
-    # GUI probe in preflight for diagnostics, but never route to a desktop
-    # manager that is not present in this checkout.
-    del gui_available
-    if os_family == "Windows":
-        return f"windows_cli_{language}"
-    if os_family == "Darwin":
-        return f"macos_cli_{language}"
-    if os_family == "Linux":
-        if interaction_mode == "headless_server":
-            return f"linux_cli_{language}"
-        return f"linux_wizard_{language}"
-    return f"cli_{language}"
-
-
-def _route_vault_management(os_family: str, language: str, gui_available: bool, interaction_mode: str) -> str:
-    del gui_available
-    if os_family == "Windows":
-        return f"windows_cli_{language}"
-    if os_family == "Darwin":
-        return f"macos_cli_{language}"
-    if os_family == "Linux":
-        if interaction_mode == "headless_server":
-            return f"linux_vault_cli_{language}"
-        return f"linux_vault_cli_{language}"
-    return f"vault_cli_{language}"
-
-
-def _load_metadata_summary() -> dict[str, Any]:
-    raw = _load_json(metadata_path()) or {}
-    raw_profiles = raw.get("profiles")
-    if not isinstance(raw_profiles, dict):
-        raw_profiles = {}
-
-    profiles_by_id: dict[str, dict[str, str]] = {}
-    for key, profile_raw in raw_profiles.items():
-        if not isinstance(key, str) or not isinstance(profile_raw, dict):
-            continue
-        profile_id = _clean_text(profile_raw.get("id")) or _clean_text(key)
-        profile_name = _clean_text(profile_raw.get("name")) or _clean_text(key)
-        if not profile_id or not profile_name:
-            continue
-        profiles_by_id[profile_id] = {
-            "id": profile_id,
-            "name": profile_name,
-            "description": _clean_text(profile_raw.get("description")),
-            "contract_base_url": _clean_text(profile_raw.get("contract_base_url")),
-            "spot_base_url": _clean_text(profile_raw.get("spot_base_url")),
-            "api_key_hint": _clean_text(profile_raw.get("api_key_hint")),
-        }
-
-    default_profile_id = _clean_text(raw.get("default_profile_id"))
-    if default_profile_id and default_profile_id not in profiles_by_id:
-        default_profile_id = ""
-    if not default_profile_id:
-        legacy_default = _clean_text(raw.get("default_profile"))
-        if legacy_default in profiles_by_id:
-            default_profile_id = legacy_default
-        elif legacy_default:
-            for profile in profiles_by_id.values():
-                if profile["name"] == legacy_default:
-                    default_profile_id = profile["id"]
-                    break
-
-    summary = sorted(profiles_by_id.values(), key=lambda item: item["name"].lower())
-    default_profile = profiles_by_id.get(default_profile_id, {})
-    return {
-        "count": len(summary),
-        "default_profile_id": default_profile_id or None,
-        "default_profile_name": default_profile.get("name") or None,
-        "summary": summary,
-    }
-
-
-def _load_vault_summary() -> dict[str, Any]:
-    raw = _load_json(vault_config_path()) or {}
-    mode = _clean_text(raw.get("mode")) or None
-    configured = bool(raw)
-    return {
-        "configured": configured,
-        "mode": mode,
-    }
 
 
 def _probe_required_modules() -> tuple[bool, list[str]]:
@@ -356,6 +150,17 @@ def _probe_required_modules() -> tuple[bool, list[str]]:
 def validate_runtime_environment(env: Optional[dict[str, str]] = None) -> dict[str, Any]:
     source = os.environ if env is None else env
     issues: list[str] = []
+
+    credential_names = ("WEEX_API_KEY", "WEEX_API_SECRET", "WEEX_API_PASSPHRASE")
+    credential_presence = {
+        name: bool(_clean_text(source.get(name))) for name in credential_names
+    }
+    if any(credential_presence.values()) and not all(credential_presence.values()):
+        missing = [name for name, present in credential_presence.items() if not present]
+        issues.append(
+            "WEEX_API_KEY, WEEX_API_SECRET, and WEEX_API_PASSPHRASE must be provided "
+            "together. Missing: " + ", ".join(missing)
+        )
 
     raw_timeout = _clean_text(source.get("WEEX_API_TIMEOUT"))
     if raw_timeout:
@@ -418,8 +223,7 @@ def _run_runtime_setup(language: Optional[str] = None) -> dict[str, Any]:
 
 
 def _clear_runtime_sensitive_module_cache() -> None:
-    for module_name in ("weex_profile_store",):
-        sys.modules.pop(module_name, None)
+    return None
 
 
 def _raise_private_runtime_preflight_error(
@@ -496,58 +300,13 @@ def ensure_private_runtime_ready(
     )
 
 
-def _fallback_vault_runtime(vault_summary: dict[str, Any]) -> dict[str, Any]:
-    configured = bool(vault_summary["configured"])
-    mode = vault_summary["mode"]
-    session_exists = vault_session_path().exists()
-    if not configured:
-        return {
-            "backend": "Application Vault (setup required)",
-            "configured": False,
-            "mode": None,
-            "state": "uninitialized",
-            "action_required": "setup",
-            "session_descriptor_present": session_exists,
-        }
-    if mode == "manual_once":
-        return {
-            "backend": f"Application Vault ({mode})",
-            "configured": True,
-            "mode": mode,
-            "state": "unlocked" if session_exists else "locked",
-            "action_required": None if session_exists else "unlock",
-            "session_descriptor_present": session_exists,
-        }
-    return {
-        "backend": "Application Vault (unknown)",
-        "configured": True,
-        "mode": mode,
-        "state": "misconfigured",
-        "action_required": "repair",
-        "session_descriptor_present": session_exists,
-    }
-
-
-def _probe_default_profile_usable(store: Any, default_profile_id: Optional[str]) -> Optional[bool]:
-    if not default_profile_id:
-        return False
-    if store is None:
-        return None
-    try:
-        return bool(store.profile_has_credentials_by_id(default_profile_id))
-    except Exception:
-        return None
-
-
 def build_agent_init_state(preferred_language: str | None = None) -> dict[str, Any]:
     resolved_language, language_source = resolve_language_with_source(preferred_language)
     os_family = platform.system()
-    tkinter_available, tkinter_probe = _detect_tkinter_available(os_family)
-    gui_runtime = _prepare_gui_runtime(os_family, resolved_language, tkinter_available=tkinter_available)
-    interaction_mode = _detect_interaction_mode(os_family)
-    gui_available = _detect_gui_available(os_family, tkinter_available, gui_runtime)
-    metadata_summary = _load_metadata_summary()
-    vault_summary = _load_vault_summary()
+    credential_presence = {
+        name: bool(_clean_text(os.getenv(name)))
+        for name in ("WEEX_API_KEY", "WEEX_API_SECRET", "WEEX_API_PASSPHRASE")
+    }
 
     return {
         "schema_version": 1,
@@ -561,59 +320,36 @@ def build_agent_init_state(preferred_language: str | None = None) -> dict[str, A
             "os_release": platform.release(),
             "launcher": _launcher_for_os(os_family),
             "python_executable": sys.executable,
-            "interaction_mode": interaction_mode,
-            "gui_available": gui_available,
-            "tkinter_available": tkinter_available,
-            "gui_bootstrap_available": os_family in {"Windows", "Darwin"},
-            "gui_bootstrap_recommended": os_family in {"Windows", "Darwin"} and not gui_available,
-            "tkinter_probe": tkinter_probe,
-            "gui_runtime": gui_runtime,
             "config_dir": str(config_dir()),
         },
         "routes": {
-            "profile_management": _route_profile_management(os_family, resolved_language, gui_available, interaction_mode),
-            "vault_management": _route_vault_management(os_family, resolved_language, gui_available, interaction_mode),
             "public_api_launcher": _launcher_for_os(os_family),
             "private_api_requires": [
-                "direct_contract_spot:complete_environment_credentials_or_saved_profile",
-                "automated_authorization:saved_profile",
-                "vault_ready_for_saved_profile_paths",
+                "direct_contract_spot:complete_environment_credentials",
+                "trade_guard:complete_environment_credentials",
+                "automated_authorization:complete_environment_credentials",
             ],
         },
-        "vault": vault_summary,
-        "profiles": metadata_summary,
+        "credentials": {
+            "source": "environment",
+            "complete": all(credential_presence.values()),
+            "present": credential_presence,
+        },
     }
 
 
 def build_agent_runtime_state(
     preferred_language: str | None = None,
     command: Optional[str] = None,
-    *,
-    probe_default_profile_usable: bool = True,
 ) -> dict[str, Any]:
     resolved_language, _language_source = resolve_language_with_source(preferred_language)
     os_family = platform.system()
     requirements_ready, missing_modules = _probe_required_modules()
     env_validation = validate_runtime_environment()
-    metadata_summary = _load_metadata_summary()
-    vault_summary = _load_vault_summary()
-    store = _load_store_module()
-
-    if store is not None:
-        try:
-            status = store.vault_status()
-            vault_runtime = {
-                "backend": status.get("backend"),
-                "configured": bool(status.get("configured")),
-                "mode": status.get("mode"),
-                "state": status.get("state"),
-                "action_required": status.get("action_required"),
-                "session_descriptor_present": bool(status.get("vault_session_path") and Path(str(status["vault_session_path"])).exists()),
-            }
-        except Exception:
-            vault_runtime = _fallback_vault_runtime(vault_summary)
-    else:
-        vault_runtime = _fallback_vault_runtime(vault_summary)
+    credential_presence = {
+        name: bool(_clean_text(os.getenv(name)))
+        for name in ("WEEX_API_KEY", "WEEX_API_SECRET", "WEEX_API_PASSPHRASE")
+    }
 
     return {
         "schema_version": 1,
@@ -634,16 +370,10 @@ def build_agent_runtime_state(
             for env_name in RUNTIME_ENV_VARS
         },
         "env_validation": env_validation,
-        "vault": vault_runtime,
-        "profiles": {
-            "count": metadata_summary["count"],
-            "default_profile_id": metadata_summary["default_profile_id"],
-            "default_profile_name": metadata_summary["default_profile_name"],
-            "default_profile_usable": (
-                _probe_default_profile_usable(store, metadata_summary["default_profile_id"])
-                if probe_default_profile_usable
-                else None
-            ),
+        "credentials": {
+            "source": "environment",
+            "complete": all(credential_presence.values()),
+            "present": credential_presence,
         },
     }
 
@@ -657,13 +387,10 @@ def refresh_agent_init_state(preferred_language: str | None = None) -> dict[str,
 def refresh_agent_runtime_state(
     preferred_language: str | None = None,
     command: Optional[str] = None,
-    *,
-    probe_default_profile_usable: bool = True,
 ) -> dict[str, Any]:
     payload = build_agent_runtime_state(
         preferred_language=preferred_language,
         command=command,
-        probe_default_profile_usable=probe_default_profile_usable,
     )
     _atomic_write_json(agent_runtime_path(), payload)
     return payload
@@ -672,15 +399,12 @@ def refresh_agent_runtime_state(
 def refresh_agent_records(
     preferred_language: str | None = None,
     command: Optional[str] = None,
-    *,
-    probe_default_profile_usable: bool = True,
 ) -> dict[str, dict[str, Any]]:
     return {
         "init": refresh_agent_init_state(preferred_language=preferred_language),
         "runtime": refresh_agent_runtime_state(
             preferred_language=preferred_language,
             command=command,
-            probe_default_profile_usable=probe_default_profile_usable,
         ),
     }
 

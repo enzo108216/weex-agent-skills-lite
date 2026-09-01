@@ -26,13 +26,17 @@ class LiteBoundaryTests(unittest.TestCase):
         self.assertFalse(manifest["host_support"]["other_hosts"]["supported"])
         self.assertEqual(manifest["host_support"]["openclaw"]["linked_skills"], ["weex-trader-skill"])
         self.assertIn("submit-auto", manifest["routing"]["automated_strategy_authorization"]["commands"])
+        self.assertEqual(manifest["credential_policy"]["source"], "runtime_environment_only")
+        self.assertEqual(
+            manifest["credential_policy"]["required_together"],
+            ["WEEX_API_KEY", "WEEX_API_SECRET", "WEEX_API_PASSPHRASE"],
+        )
         self.assertTrue(
             {
-                "account risk scan",
-                "deep risk analysis",
-                "PnL monitor and automatic-close orchestration",
+                "saved profiles and vaults",
+                "account risk reports",
+                "monitor",
                 "partner",
-                "replay",
                 "profile analysis",
             }.issubset(set(manifest["excluded_capabilities"]))
         )

@@ -1,51 +1,31 @@
-# Auth and Signing (Compact)
+# Auth and Signing
 
-REST base URLs:
-- contract: `https://api-contract.weex.com`
-- spot: `https://api-spot.weex.com`
-- custom base URLs must use `https://` and a host under `weex.com` or `weex.tech`
+Official REST origins:
 
-Private headers:
-- `ACCESS-KEY`
-- `ACCESS-PASSPHRASE`
-- `ACCESS-TIMESTAMP` (ms)
-- `ACCESS-SIGN`
+- Futures: `https://api-contract.weex.com`
+- Spot: `https://api-spot.weex.com`
+- Overrides must use `https://` on an allowed `weex.com` or `weex.tech` host.
 
-Signing message:
-- no query: `timestamp + METHOD + requestPath + body`
-- with query: `timestamp + METHOD + requestPath + "?" + queryString + body`
+Private headers are `ACCESS-KEY`, `ACCESS-PASSPHRASE`, `ACCESS-TIMESTAMP`, and `ACCESS-SIGN`. The signature message is `timestamp + METHOD + requestPath + optional("?" + queryString) + body`, signed as Base64 HMAC-SHA256.
 
-Signature:
-- `Base64(HMAC_SHA256(secret, message))`
+## Only credential source
 
-Supported credential sources for direct contract/spot REST:
-- container/runtime environment: `WEEX_API_KEY`, `WEEX_API_SECRET`, and `WEEX_API_PASSPHRASE`
-- profile metadata in `~/.weex-trader-skill/profiles.meta.json` with secrets in the Application Vault
-  - Windows/macOS/Linux: application vault with portable CLI `manual_once` setup/unlock flows
+Every private direct REST, trade-guard, and automated-authorization path reads these runtime variables together:
 
-Credential precedence:
-- an explicit `--profile` uses that saved profile
-- without `--profile`, a complete fixed environment set is used before the configured default profile
-- the three fixed environment variables must be provided together; a partial set fails closed
-- direct contract/spot private calls can therefore run without a saved profile
-- Automated authorization and profile-management flows require saved profiles; trade-guard may use an explicit saved profile or a complete runtime credential set
+- `WEEX_API_KEY`
+- `WEEX_API_SECRET`
+- `WEEX_API_PASSPHRASE`
 
-Optional environment overrides still supported:
-- `WEEX_TRADER_SKILL_HOME`: override the runtime state directory for profiles, vault files, and agent cache
-- `WEEX_API_TIMEOUT`: override HTTP timeout in seconds for API calls. Contract and spot keep their existing defaults. A timeout never authorizes an automatic retry.
-- `WEEX_CONTRACT_API_BASE` / `WEEX_SPOT_API_BASE`: select product-specific contract/spot hosts; use these for staging because the two products have different hosts
-- `WEEX_API_BASE`: shared fallback base URL when a product-specific base is not set
-- `WEEX_LOCALE`: override the locale header for direct contract/spot calls
+A missing or partial set fails before a private WEEX request. Credentials are not accepted through argv, JSON input, files, saved profiles, Vaults, or keychains. Public endpoints do not require credentials.
 
-Only the three credential variables are required for environment-authenticated direct contract/spot REST. Every variable in this optional list may be omitted; the official production hosts, default timeout, and default locale are then used.
+Optional environment configuration:
 
-Credential source policy:
-- prefer runtime secret injection for containerized direct contract/spot calls and saved profiles for interactive use
-- if neither a complete fixed environment set nor a usable saved profile exists, fail fast
-- for server automation, save/rotate profile secrets with `--secrets-stdin-json` or `--api-key-env` / `--api-secret-env` / `--api-passphrase-env` instead of raw argv secrets
-- public endpoints and endpoint-listing commands do not require a valid default profile
-- an explicitly requested `--profile` must still resolve successfully
-- on Linux `manual_once`, `list/show` may return `has_credentials: null` with `credentials_status: "unknown_locked"` until the vault is unlocked
+- `WEEX_TRADER_SKILL_HOME`: local non-secret cache/authorization state directory.
+- `WEEX_API_TIMEOUT`: positive HTTP timeout; never authorizes a retry.
+- `WEEX_CONTRACT_API_BASE` / `WEEX_SPOT_API_BASE`: product-specific origin.
+- `WEEX_API_BASE`: shared fallback origin.
+- `WEEX_LOCALE`: locale header.
 
-Main reference:
-- https://www.weex.com/api-doc/spot/QuickStart/Signature
+The runtime derives an opaque HMAC-based environment-account ID from the credential set and selected origins. It binds pending confirmations and automatic authorizations so a credential/origin change fails closed. The ID and credentials are never included in public output.
+
+Main WEEX reference: <https://www.weex.com/api-doc/spot/QuickStart/Signature>

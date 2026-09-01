@@ -2723,27 +2723,6 @@ class AutoTradeCliTests(unittest.TestCase):
     def _profile_home(self, root: Path) -> Path:
         home = root / "weex-home"
         home.mkdir(mode=0o700)
-        metadata = home / "profiles.meta.json"
-        metadata.write_text(
-            json.dumps(
-                {
-                    "version": 2,
-                    "default_profile_id": "profile-1",
-                    "profiles": {
-                        "profile-1": {
-                            "id": "profile-1",
-                            "name": "strategy-live",
-                            "description": "fixture without credentials",
-                            "contract_base_url": "",
-                            "spot_base_url": "",
-                            "api_key_hint": "",
-                        }
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-        metadata.chmod(0o600)
         return home
 
     def _run_cli(
@@ -2767,6 +2746,9 @@ class AutoTradeCliTests(unittest.TestCase):
                 **os.environ,
                 "WEEX_TRADER_SKILL_HOME": str(home),
                 "WEEX_AUTO_TRADE_NOTIFICATION_MODE": "disabled",
+                "WEEX_API_KEY": "test-api-key",
+                "WEEX_API_SECRET": "test-api-secret",
+                "WEEX_API_PASSPHRASE": "test-api-passphrase",
                 "PYTHONDONTWRITEBYTECODE": "1",
             },
             check=False,
@@ -2785,13 +2767,12 @@ class AutoTradeCliTests(unittest.TestCase):
             process, registered = self._run_cli(
                 home,
                 "register-strategy",
-                {"profile": "strategy-live", "strategy_name": "grid-btc"},
+                {"strategy_name": "grid-btc"},
             )
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertEqual(registered["status"], "ACTIVE")
 
             scope_payload = {
-                "profile": "strategy-live",
                 "strategy_id": registered["strategy_id"],
                 "trade_types": ["SPOT", "FUTURES"],
                 "symbols": ["BTCUSDT"],
@@ -2808,7 +2789,6 @@ class AutoTradeCliTests(unittest.TestCase):
                 home,
                 "show-authorization-request",
                 {
-                    "profile": "strategy-live",
                     "strategy_id": registered["strategy_id"],
                     "request_id": pending["request_id"],
                 },
@@ -2816,7 +2796,7 @@ class AutoTradeCliTests(unittest.TestCase):
             self.assertEqual(process.returncode, 0, process.stderr)
             confirmation = shown["confirmation"]
             self.assertEqual(confirmation["strategy_name"], "grid-btc")
-            self.assertEqual(confirmation["profile"], "strategy-live")
+            self.assertEqual(confirmation["credential_source"], "environment")
             self.assertEqual(confirmation["trading_mode"], "live")
             self.assertEqual(confirmation["trade_types"], ["SPOT", "FUTURES"])
             self.assertEqual(confirmation["max_single_amount_u"], "10")
@@ -2837,7 +2817,6 @@ class AutoTradeCliTests(unittest.TestCase):
                 home,
                 "grant-authorization",
                 {
-                    "profile": "strategy-live",
                     "strategy_id": registered["strategy_id"],
                     "request_id": pending["request_id"],
                     "scope_signature": pending["scope_signature"],
@@ -2850,7 +2829,6 @@ class AutoTradeCliTests(unittest.TestCase):
                 home,
                 "show-authorization-request",
                 {
-                    "profile": "strategy-live",
                     "strategy_id": registered["strategy_id"],
                     "request_id": pending["request_id"],
                 },
@@ -2861,7 +2839,7 @@ class AutoTradeCliTests(unittest.TestCase):
             process, event_list = self._run_cli(
                 home,
                 "event-list",
-                {"profile": "strategy-live", "strategy_id": registered["strategy_id"]},
+                {"strategy_id": registered["strategy_id"]},
             )
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertGreaterEqual(len(event_list["events"]), 3)
@@ -2882,7 +2860,6 @@ class AutoTradeCliTests(unittest.TestCase):
                 home,
                 "register-strategy",
                 {
-                    "profile": "strategy-live",
                     "strategy_name": "must-not-exist",
                     "api_secret": "never-echo-this-value",
                 },
@@ -2898,22 +2875,22 @@ class AutoTradeCliTests(unittest.TestCase):
             process, registered = self._run_cli(
                 home,
                 "register-strategy",
-                {"profile": "strategy-live", "strategy_name": "before-snapshot"},
+                {"strategy_name": "before-snapshot"},
             )
             self.assertEqual(process.returncode, 0, process.stderr)
             process, snapshot = self._run_cli(
                 home,
                 "snapshot-state",
-                {"profile": "strategy-live", "retention_count": 3},
+                {"retention_count": 3},
             )
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertEqual(snapshot["status"], "SNAPSHOT_CREATED")
-            self.assertEqual(snapshot["profile"], "strategy-live")
+            self.assertEqual(snapshot["credential_source"], "environment")
 
             process, later = self._run_cli(
                 home,
                 "register-strategy",
-                {"profile": "strategy-live", "strategy_name": "after-snapshot"},
+                {"strategy_name": "after-snapshot"},
             )
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertNotEqual(later["strategy_id"], registered["strategy_id"])
@@ -2921,15 +2898,15 @@ class AutoTradeCliTests(unittest.TestCase):
             process, restored = self._run_cli(
                 home,
                 "restore-state",
-                {"profile": "strategy-live", "snapshot_id": snapshot["snapshot_id"]},
+                {"snapshot_id": snapshot["snapshot_id"]},
             )
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertEqual(restored["status"], "STATE_RESTORED_DISABLED")
-            self.assertEqual(restored["profile"], "strategy-live")
+            self.assertEqual(restored["credential_source"], "environment")
             process, listed = self._run_cli(
                 home,
                 "list-strategies",
-                {"profile": "strategy-live"},
+                {},
             )
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertEqual(
@@ -2948,7 +2925,6 @@ class AutoTradeCliTests(unittest.TestCase):
                         home,
                         "snapshot-state",
                         {
-                            "profile": "strategy-live",
                             field: "must-not-be-accepted-or-echoed",
                         },
                     )
@@ -2970,7 +2946,7 @@ class AutoTradeCliTests(unittest.TestCase):
                     process, response = self._run_cli(
                         home,
                         "snapshot-state",
-                        {"profile": "strategy-live", "retention_count": invalid},
+                        {"retention_count": invalid},
                     )
                     self.assertEqual(process.returncode, 2)
                     self.assertEqual(response["error"]["code"], "INVALID_RETENTION_COUNT")
@@ -2992,9 +2968,9 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
         cli_module = load_cli_module()
         state = state_module.AutoTradeState(root / "state" / "state.sqlite3")
         state.initialize()
-        profile = SimpleNamespace(profile_id="profile-1", name="strategy-live")
+        profile = SimpleNamespace(account_id="profile-1", credential_source="environment")
         strategy = state.register_strategy(
-            profile_id=profile.profile_id,
+            profile_id=profile.account_id,
             strategy_name="facade-boundary",
             distribution="official",
         )
@@ -3009,6 +2985,44 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             confirm_live=True,
         )
         return state, cli_module, profile, strategy, authorization
+
+    def test_environment_account_switch_cannot_reuse_strategy_or_authorization(self) -> None:
+        state_module = load_state_module()
+        cli_module = load_cli_module()
+        with tempfile.TemporaryDirectory() as tempdir:
+            state = state_module.AutoTradeState(Path(tempdir) / "state" / "state.sqlite3")
+            state.initialize()
+            first_account = SimpleNamespace(account_id="env-first", credential_source="environment")
+            second_account = SimpleNamespace(account_id="env-second", credential_source="environment")
+            first = cli_module.AutoTradeFacade(state, account_resolver=lambda: first_account)
+            registered = first.execute("register-strategy", {"strategy_name": "bound"})
+            request = first.execute(
+                "ensure-authorization",
+                {
+                    "strategy_id": registered["strategy_id"],
+                    **complete_scope(),
+                },
+            )
+            first.execute(
+                "grant-authorization",
+                {
+                    "strategy_id": registered["strategy_id"],
+                    "request_id": request["request_id"],
+                    "scope_signature": request["scope_signature"],
+                },
+                confirm_live=True,
+            )
+
+            second = cli_module.AutoTradeFacade(state, account_resolver=lambda: second_account)
+            self.assertEqual(second.execute("list-strategies", {})["strategies"], [])
+            with self.assertRaisesRegex(
+                cli_module.FacadeError,
+                "current environment account",
+            ):
+                second.execute(
+                    "retire-strategy",
+                    {"strategy_id": registered["strategy_id"]},
+                )
 
     def test_public_auto_and_event_projections_separate_leg_amount_from_quota(self) -> None:
         cli_module = load_cli_module()
@@ -3032,7 +3046,6 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                 ],
                 "advisory_alerts": [{"type": "internal"}],
             },
-            profile_name="profile",
             strategy_id="strat_1234567890",
             authorization_id="auth_1234567890",
         )
@@ -3108,17 +3121,17 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                 ],
             )
             notification_worker_launcher = Mock()
+            runtime_factory = Mock(return_value=runtime)
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
-                auto_trade_runtime_factory=lambda resolved: runtime,
+                account_resolver=lambda: profile,
+                auto_trade_runtime_factory=runtime_factory,
                 notification_worker_launcher=notification_worker_launcher,
             )
 
             result = facade.execute(
                 "submit-auto",
                 {
-                    "profile": profile.name,
                     "strategy_id": strategy["strategy_id"],
                     "authorization_id": authorization["authorization_id"],
                     "idempotency_key": "facade-submit-1",
@@ -3138,9 +3151,10 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             )
 
             self.assertEqual(result["status"], "ACCEPTED")
-            self.assertEqual(result["profile"], profile.name)
+            self.assertEqual(result["credential_source"], "environment")
             self.assertEqual(result["authorization_id"], "auth_***" + authorization["authorization_id"][-6:])
             self.assertEqual(result["legs"][0]["weex_order_id"], "weex-facade-1")
+            runtime_factory.assert_called_once_with(profile.account_id)
             notification_worker_launcher.assert_called_once()
             worker_call = notification_worker_launcher.call_args.kwargs
             self.assertEqual(worker_call["state_path"], state.db_path)
@@ -3160,8 +3174,8 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             )
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
-                auto_trade_runtime_factory=lambda resolved: runtime,
+                account_resolver=lambda: profile,
+                auto_trade_runtime_factory=lambda account_id: runtime,
                 manual_intent_writer=captured.append,
             )
             order = {
@@ -3189,7 +3203,6 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                 result = facade.execute(
                     "submit-auto",
                     {
-                        "profile": profile.name,
                         "strategy_id": strategy["strategy_id"],
                         "authorization_id": authorization["authorization_id"],
                         "idempotency_key": "facade-submit-fallback",
@@ -3230,15 +3243,14 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             )
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
-                auto_trade_runtime_factory=lambda resolved: runtime,
+                account_resolver=lambda: profile,
+                auto_trade_runtime_factory=lambda account_id: runtime,
                 manual_intent_writer=writer,
             )
 
             result = facade.execute(
                 "submit-auto",
                 {
-                    "profile": profile.name,
                     "strategy_id": strategy["strategy_id"],
                     "authorization_id": authorization["authorization_id"],
                     "idempotency_key": "facade-unknown-fallback",
@@ -3258,10 +3270,10 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             state = state_module.AutoTradeState(Path(tempdir) / "state" / "state.sqlite3")
             state.initialize()
-            profile = SimpleNamespace(profile_id="profile-1", name="strategy-live")
-            facade = cli_module.AutoTradeFacade(state, profile_resolver=lambda name: profile)
+            profile = SimpleNamespace(account_id="profile-1", credential_source="environment")
+            facade = cli_module.AutoTradeFacade(state, account_resolver=lambda: profile)
             strategy = state.register_strategy(
-                profile_id=profile.profile_id, strategy_name="request-display", distribution="official"
+                profile_id=profile.account_id, strategy_name="request-display", distribution="official"
             )
             scope = {
                 "trade_types": ["SPOT"],
@@ -3273,7 +3285,6 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             }
             request = state.ensure_authorization(strategy_id=strategy["strategy_id"], scope=scope)
             payload = {
-                "profile": profile.name,
                 "strategy_id": strategy["strategy_id"],
                 "request_id": request["request_id"],
             }
@@ -3314,7 +3325,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             self.assertNotIn("projected_expires_at_if_granted_now", rejected["confirmation"])
 
             expired_strategy = state.register_strategy(
-                profile_id=profile.profile_id, strategy_name="expired-request", distribution="official"
+                profile_id=profile.account_id, strategy_name="expired-request", distribution="official"
             )
             expired_request = state.ensure_authorization(
                 strategy_id=expired_strategy["strategy_id"],
@@ -3325,7 +3336,6 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             expired = facade.execute(
                 "show-authorization-request",
                 {
-                    "profile": profile.name,
                     "strategy_id": expired_strategy["strategy_id"],
                     "request_id": expired_request["request_id"],
                 },
@@ -3365,8 +3375,8 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             )
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
-                auto_trade_runtime_factory=lambda resolved: runtime,
+                account_resolver=lambda: profile,
+                auto_trade_runtime_factory=lambda account_id: runtime,
                 manual_intent_writer=captured.append,
             )
             with patch.object(
@@ -3377,7 +3387,6 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                 result = facade.execute(
                     "submit-auto",
                     {
-                        "profile": profile.name,
                         "strategy_id": strategy["strategy_id"],
                         "authorization_id": authorization["authorization_id"],
                         "idempotency_key": "post-submit-state-failure",
@@ -3445,8 +3454,8 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             )
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
-                auto_trade_runtime_factory=lambda resolved: runtime,
+                account_resolver=lambda: profile,
+                auto_trade_runtime_factory=lambda account_id: runtime,
                 manual_intent_writer=Mock(),
             )
             with patch.object(
@@ -3461,7 +3470,6 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                 result = facade.execute(
                     "submit-auto",
                     {
-                        "profile": profile.name,
                         "strategy_id": strategy["strategy_id"],
                         "authorization_id": authorization["authorization_id"],
                         "idempotency_key": "unrecorded-uncertainty",
@@ -3542,14 +3550,13 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             )
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
+                account_resolver=lambda: profile,
                 reconciliation_provider=provider,
             )
 
             result = facade.execute(
                 "reconcile-auto-order",
                 {
-                    "profile": profile.name,
                     "strategy_id": strategy["strategy_id"],
                     "auto_trade_order_id": order["auto_trade_order_id"],
                 },
@@ -3577,21 +3584,20 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             state = state_module.AutoTradeState(Path(tempdir) / "state" / "state.sqlite3")
             state.initialize()
-            profile = SimpleNamespace(profile_id="profile-1", name="strategy-live")
+            profile = SimpleNamespace(account_id="profile-1", credential_source="environment")
             adapter = Mock(side_effect=RuntimeError("notification unavailable"))
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
+                account_resolver=lambda: profile,
                 notification_adapter=adapter,
             )
             strategy = facade.execute(
                 "register-strategy",
-                {"profile": profile.name, "strategy_name": "notify-failure"},
+                {"strategy_name": "notify-failure"},
             )
             result = facade.execute(
                 "ensure-authorization",
                 {
-                    "profile": profile.name,
                     "strategy_id": strategy["strategy_id"],
                     "trade_types": ["SPOT"],
                     "symbols": ["BTCUSDT"],
@@ -3661,14 +3667,13 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                 }
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
+                account_resolver=lambda: profile,
                 usage_resolution_provider=provider,
             )
 
             resolved = facade.execute(
                 "resolve-auto-usage",
                 {
-                    "profile": profile.name,
                     "strategy_id": strategy["strategy_id"],
                     "usage_id": usage["usage_id"],
                 },
@@ -3677,7 +3682,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             self.assertEqual(resolved["status"], "RELEASED")
             enabled = facade.execute(
                 "enable-auto-trading-after-restore",
-                {"profile": profile.name},
+                {},
                 confirm_live=True,
             )
             self.assertEqual(enabled["status"], "AUTOMATIC_TRADING_ALREADY_ENABLED")
@@ -3698,13 +3703,12 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             )
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
+                account_resolver=lambda: profile,
             )
             with self.assertRaisesRegex(cli_module.FacadeError, "unknown field"):
                 facade.execute(
                     "resolve-auto-usage",
                     {
-                        "profile": profile.name,
                         "strategy_id": strategy["strategy_id"],
                         "usage_id": usage["usage_id"],
                         "outcome": "RELEASED",
@@ -3761,14 +3765,13 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             )
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
+                account_resolver=lambda: profile,
                 usage_resolution_provider=Mock(side_effect=TimeoutError("WEEX timeout")),
             )
             with self.assertRaisesRegex(cli_module.FacadeError, "official order query"):
                 facade.execute(
                     "resolve-auto-usage",
                     {
-                        "profile": profile.name,
                         "strategy_id": strategy["strategy_id"],
                         "usage_id": usage["usage_id"],
                     },
@@ -3811,14 +3814,13 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             }
             facade = cli_module.AutoTradeFacade(
                 state,
-                profile_resolver=lambda name: profile,
+                account_resolver=lambda: profile,
                 usage_resolution_provider=Mock(return_value=facts),
             )
             with self.assertRaisesRegex(cli_module.FacadeError, "ORDER_MAPPING_CONFLICT"):
                 facade.execute(
                     "resolve-auto-usage",
                     {
-                        "profile": profile.name,
                         "strategy_id": strategy["strategy_id"],
                         "usage_id": usage["usage_id"],
                     },
@@ -3880,7 +3882,7 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
             def send(self, prepared):
                 return self.response
 
-        boundary = runtime_module.OfficialApiBoundary(profile_name="strategy-live")
+        boundary = runtime_module.OfficialApiBoundary()
         boundary._client = lambda module, private: (
             api_module,
             FakeClient(
@@ -3903,7 +3905,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
         self.assertEqual(rejected.exception.error_message, "batch order rejected")
 
         runtime = runtime_module.OfficialAutoTradeRuntime(
-            profile_name="strategy-live",
             api=boundary,
             risk_aggregator=Mock(),
         )
@@ -3977,7 +3978,7 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                     "error": {"code": -2200, "message": "Order does not exist"},
                 }
 
-        boundary = runtime_module.OfficialApiBoundary(profile_name="strategy-live")
+        boundary = runtime_module.OfficialApiBoundary()
         boundary._client = lambda module, private: (api_module, FakeClient())
 
         with self.assertRaises(runtime_module.OfficialReadRequestFailed) as failure:
@@ -4015,7 +4016,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
             }
         )
         runtime = runtime_module.OfficialAutoTradeRuntime(
-            profile_name="strategy-live",
             api=api,
             risk_aggregator=Mock(),
         )
@@ -4084,7 +4084,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
             "tp_sl": {"has_take_profit": False, "has_stop_loss": False},
         }
         runtime = runtime_module.OfficialAutoTradeRuntime(
-            profile_name="strategy-live",
             api=Mock(),
             risk_aggregator=aggregator,
         )
@@ -4132,7 +4131,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
             }
         )
         runtime = runtime_module.OfficialAutoTradeRuntime(
-            profile_name="strategy-live",
             api=api,
             risk_aggregator=Mock(),
         )
@@ -4192,7 +4190,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                 "weex_order_id": "f-1",
                 "client_order_id": "client-f-1",
             },
-            profile_name="strategy-live",
             api=futures_api,
         )
         self.assertEqual(facts["reconciliation_status"], "COMPLETE")
@@ -4220,7 +4217,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                 "weex_order_id": "s-1",
                 "client_order_id": "client-s-1",
             },
-            profile_name="strategy-live",
             api=spot_api,
         )
         self.assertEqual(partial["reconciliation_status"], "PARTIAL")
@@ -4261,7 +4257,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
         }
         facts = runtime_module.query_official_usage_resolution(
             order=order,
-            profile_name="strategy-live",
             api=api,
         )
         self.assertEqual(facts["outcome"], "ACCEPTED")
@@ -4298,7 +4293,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
         }
         facts = runtime_module.query_official_usage_resolution(
             order=order,
-            profile_name="strategy-live",
             api=api,
         )
         self.assertEqual(facts["outcome"], "RELEASED")
@@ -4342,7 +4336,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                     "quantity": "1",
                     "price": "10",
                 },
-                profile_name="strategy-live",
                 api=api,
             )
         self.assertEqual(api.calls[-1]["query"], {"symbol": "BTCUSDT", "limit": 1000, "page": 2})
@@ -4367,7 +4360,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                     "quantity": "1",
                     "price": "10",
                 },
-                profile_name="strategy-live",
                 api=self.FakeApi({}),
             )
 
@@ -4408,7 +4400,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                 "weex_order_id": "s-archived",
                 "client_order_id": "client-s-archived",
             },
-            profile_name="strategy-live",
             api=api,
         )
 
@@ -4482,7 +4473,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                         "weex_order_id": "s-archived",
                         "client_order_id": "client-s-archived",
                     },
-                    profile_name="strategy-live",
                     api=api,
                 )
 
@@ -4522,7 +4512,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                             "weex_order_id": "s-archived",
                             "client_order_id": "client-s-archived",
                         },
-                        profile_name="strategy-live",
                         api=api,
                     )
                 self.assertTrue(all(not call["mutating"] for call in api.calls))
@@ -4565,7 +4554,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                 "weex_order_id": "plan-1",
                 "client_order_id": "client-plan-1",
             },
-            profile_name="strategy-live",
             api=api,
         )
 
@@ -4597,7 +4585,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                 "weex_order_id": "plan-2",
                 "client_order_id": "client-plan-2",
             },
-            profile_name="strategy-live",
             api=pending_api,
         )
         self.assertEqual(pending["reconciliation_status"], "PARTIAL")
@@ -4636,7 +4623,6 @@ class AutoTradeOfficialRuntimeTests(unittest.TestCase):
                 "symbol": "BTCUSDT",
                 "weex_order_id": "f-truncated",
             },
-            profile_name="strategy-live",
             api=api,
         )
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import hmac
 import time
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation, localcontext
@@ -47,11 +48,22 @@ class OfficialReadRequestFailed(RuntimeError):
 
 
 class OfficialApiBoundary:
-    """Build saved-profile clients and reject any endpoint/purpose mismatch."""
+    """Build environment-authenticated clients and reject endpoint/purpose mismatches."""
 
-    def __init__(self, *, profile_name: str) -> None:
-        self.profile_name = profile_name
+    def __init__(self, *, expected_account_id: str | None = None) -> None:
+        self.expected_account_id = expected_account_id
         self._clients: dict[tuple[str, bool], tuple[Any, Any]] = {}
+
+    def _environment_account(self, api_module: Any) -> Any:
+        account = api_module.load_environment_account()
+        if self.expected_account_id and not hmac.compare_digest(
+            self.expected_account_id,
+            account.account_id,
+        ):
+            raise SystemExit(
+                "environment account does not match the automated-trading authorization"
+            )
+        return account
 
     def _client(self, module: str, *, private: bool) -> tuple[Any, Any]:
         cache_key = (module, private)
@@ -64,14 +76,9 @@ class OfficialApiBoundary:
                 api_module.ensure_private_runtime_ready(
                     command="auto-trade.spot", auto_setup=True, language=None
                 )
-            profile = api_module.resolve_runtime_profile(
-                requested_profile=self.profile_name,
-                allow_invalid_default=False,
-            )
-            api_module.require_private_profile(profile)
+            environment_account = self._environment_account(api_module) if private else None
             base_url = (
-                profile.spot_base_url
-                or os.getenv("WEEX_SPOT_API_BASE")
+                os.getenv("WEEX_SPOT_API_BASE")
                 or os.getenv("WEEX_API_BASE")
                 or api_module.DEFAULT_BASE_URL
             )
@@ -79,10 +86,9 @@ class OfficialApiBoundary:
                 base_url=base_url,
                 timeout=float(os.getenv("WEEX_API_TIMEOUT", api_module.DEFAULT_TIMEOUT)),
                 locale=os.getenv("WEEX_LOCALE") or api_module.DEFAULT_LOCALE,
-                api_key=None,
-                api_secret=None,
-                api_passphrase=None,
-                profile_name=profile.name if private else None,
+                api_key=environment_account.credentials.api_key if environment_account else None,
+                api_secret=environment_account.credentials.api_secret if environment_account else None,
+                api_passphrase=environment_account.credentials.api_passphrase if environment_account else None,
             )
         elif module == "FUTURES":
             import weex_contract_api as api_module
@@ -91,14 +97,9 @@ class OfficialApiBoundary:
                 api_module.ensure_private_runtime_ready(
                     command="auto-trade.contract", auto_setup=True, language=None
                 )
-            profile = api_module.resolve_runtime_profile(
-                requested_profile=self.profile_name,
-                allow_invalid_default=False,
-            )
-            api_module.require_private_profile(profile)
+            environment_account = self._environment_account(api_module) if private else None
             base_url = (
-                profile.contract_base_url
-                or os.getenv("WEEX_CONTRACT_API_BASE")
+                os.getenv("WEEX_CONTRACT_API_BASE")
                 or os.getenv("WEEX_API_BASE")
                 or api_module.DEFAULT_BASE_URL
             )
@@ -106,10 +107,9 @@ class OfficialApiBoundary:
                 base_url=base_url,
                 timeout=float(os.getenv("WEEX_API_TIMEOUT", api_module.DEFAULT_TIMEOUT)),
                 locale=os.getenv("WEEX_LOCALE") or api_module.DEFAULT_LOCALE,
-                api_key=None,
-                api_secret=None,
-                api_passphrase=None,
-                profile_name=profile.name if private else None,
+                api_key=environment_account.credentials.api_key if environment_account else None,
+                api_secret=environment_account.credentials.api_secret if environment_account else None,
+                api_passphrase=environment_account.credentials.api_passphrase if environment_account else None,
             )
         else:
             raise ValueError("unsupported official product module")
@@ -171,12 +171,11 @@ class OfficialAutoTradeRuntime:
     def __init__(
         self,
         *,
-        profile_name: str,
+        expected_account_id: str | None = None,
         api: Any | None = None,
         risk_aggregator: Any | None = None,
     ) -> None:
-        self.profile_name = profile_name
-        self.api = api or OfficialApiBoundary(profile_name=profile_name)
+        self.api = api or OfficialApiBoundary(expected_account_id=expected_account_id)
         self.risk_aggregator = risk_aggregator or TradeDataAggregator()
 
     def risk_payload_provider(self, leg: dict[str, Any]) -> dict[str, Any]:
@@ -185,7 +184,7 @@ class OfficialAutoTradeRuntime:
         leg_type = str(leg.get("leg_type") or "")
         if leg_type in {"TAKE_PROFIT", "STOP_LOSS"}:
             payload = self.risk_aggregator.collect_account_facts_payload(
-                profile_name=self.profile_name,
+                profile_name="",
                 market="futures",
                 trading_mode="live",
                 symbol=_required_text(order.get("symbol"), "symbol"),
@@ -193,7 +192,7 @@ class OfficialAutoTradeRuntime:
             payload["_auto_analysis_type"] = "account"
         else:
             payload = self.risk_aggregator.collect_order_risk_payload(
-                profile_name=self.profile_name,
+                profile_name="",
                 market=module.lower(),
                 trading_mode="live",
                 raw_order=order,
@@ -428,14 +427,14 @@ class OfficialAutoTradeRuntime:
 def query_official_order_facts(
     *,
     order: dict[str, Any],
-    profile_name: str,
+    expected_account_id: str | None = None,
     api: Any | None = None,
 ) -> dict[str, Any]:
     """Query only official order/trade endpoints and return normalized facts."""
     module = _required_module(order.get("module"))
     symbol = _required_text(order.get("symbol"), "symbol").upper()
     order_id = _required_text(order.get("weex_order_id"), "weex_order_id")
-    boundary = api or OfficialApiBoundary(profile_name=profile_name)
+    boundary = api or OfficialApiBoundary(expected_account_id=expected_account_id)
     leg_type = str(order.get("leg_type") or "PRIMARY").upper()
     if module == "FUTURES" and leg_type in {
         "CONDITIONAL",
@@ -485,7 +484,7 @@ def query_official_order_facts(
 def query_official_usage_resolution(
     *,
     order: dict[str, Any],
-    profile_name: str,
+    expected_account_id: str | None = None,
     api: Any | None = None,
 ) -> dict[str, Any]:
     """Resolve an uncertain submission using a bound, read-only WEEX order lookup.
@@ -499,7 +498,7 @@ def query_official_usage_resolution(
     symbol = _required_text(order.get("symbol"), "symbol").upper()
     local_order_id = _optional_text(order.get("weex_order_id"))
     client_order_id = _required_text(order.get("client_order_id"), "client_order_id")
-    boundary = api or OfficialApiBoundary(profile_name=profile_name)
+    boundary = api or OfficialApiBoundary(expected_account_id=expected_account_id)
     leg_type = str(order.get("leg_type") or "PRIMARY").upper()
 
     detail: dict[str, Any] | None = None

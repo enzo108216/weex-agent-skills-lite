@@ -10,8 +10,7 @@ import subprocess
 import sys
 from typing import Any, Optional
 
-from weex_agent_state import refresh_agent_records, requirements_path
-from weex_gui_bootstrap import requirements_lock_path
+from weex_agent_state import refresh_agent_records, requirements_lock_path, requirements_path
 
 
 def output_json(payload: dict[str, Any], pretty: bool) -> None:

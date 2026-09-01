@@ -68,7 +68,7 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def build_risk_signature(
     *,
-    profile_name: str | None,
+    account_id: str,
     market: str,
     trading_mode: str,
     order_preview: dict[str, Any],
@@ -95,7 +95,7 @@ def build_risk_signature(
         {
             "intent_id": intent_id,
             "intent_type": intent_type,
-            "profile_name": profile_name,
+            "account_id": account_id,
             "market": market,
             "trading_mode": trading_mode,
             "environment": environment,
@@ -127,7 +127,7 @@ def intent_signature_is_valid(
     if not isinstance(stored_signature, str) or not stored_signature:
         return False
     recomputed_signature = build_risk_signature(
-        profile_name=payload.get("profile_name"),
+        account_id=str(payload.get("account_id") or ""),
         market=str(payload.get("market") or ""),
         trading_mode=str(payload.get("trading_mode") or ""),
         order_preview=payload.get("order_preview"),
@@ -153,7 +153,7 @@ def intent_signature_is_valid(
 
 def build_intent(
     *,
-    profile_name: str | None,
+    account_id: str,
     market: str,
     trading_mode: str = "live",
     environment: dict[str, Any] | None = None,
@@ -174,7 +174,7 @@ def build_intent(
     payload = {
         "intent_id": intent_id,
         "intent_type": intent_type,
-        "profile_name": profile_name,
+        "account_id": account_id,
         "market": market,
         "trading_mode": trading_mode,
         "created_at": current_ms,
@@ -192,7 +192,7 @@ def build_intent(
     if tp_sl_order is not None:
         payload["tp_sl_order"] = tp_sl_order
     payload["risk_signature"] = build_risk_signature(
-        profile_name=profile_name,
+        account_id=account_id,
         market=market,
         trading_mode=trading_mode,
         order_preview=order_preview,

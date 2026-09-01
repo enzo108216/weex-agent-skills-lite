@@ -28,6 +28,8 @@ bash skills/weex-trader-skill/scripts/update_openclaw_skills.sh --dev
 
 ## 凭据与安全
 
-通过 saved profile/Application Vault，或由 OpenClaw 运行时注入完整的 `WEEX_API_KEY`、`WEEX_API_SECRET`、`WEEX_API_PASSPHRASE`。不得把秘密放在命令行参数或聊天中。自然语言订单必须先 `preview-order`，并将后续独立消息中的最新确认文本原样传给 confirm 命令的 `--user-reply`；真实盘需要 `--confirm-live`，官方合约模拟盘写入需要 `--trading-mode demo --confirm-demo`。
+账户密钥仅由 OpenClaw 运行时注入，必须同时配置完整的 `WEEX_API_KEY`、`WEEX_API_SECRET`、`WEEX_API_PASSPHRASE`；缺失或部分配置会直接拒绝私有操作。本项目不提供 saved profile、Vault、命令行参数或 JSON payload 凭据入口。不得把秘密放在命令行参数或聊天中。
+
+自然语言订单必须先 `preview-order`，并将后续独立消息中的最新确认文本原样传给 confirm 命令的 `--user-reply`；真实盘下单与撤单需要 `--confirm-live`，官方合约模拟盘写入需要 `--trading-mode demo --confirm-demo`。环境凭据或 API origin 变化后，旧确认和旧自动交易授权不可复用。
 
 详细路由和自动授权命令见 [`skills/weex-trader-skill/SKILL.md`](skills/weex-trader-skill/SKILL.md) 与 [`skills/weex-trader-skill/references/script-operations.md`](skills/weex-trader-skill/references/script-operations.md)。

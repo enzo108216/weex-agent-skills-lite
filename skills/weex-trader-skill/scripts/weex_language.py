@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Language helpers for localized WEEX profile setup scripts."""
+"""Language helpers for the localized WEEX Trader CLI."""
 
 from __future__ import annotations
 

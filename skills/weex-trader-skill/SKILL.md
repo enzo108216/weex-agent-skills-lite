@@ -34,7 +34,7 @@ The updater validates the checkout, refreshes only `~/.openclaw/skills/weex-trad
 ## Core capabilities
 
 - Natural-language spot and futures trading with explicit market, symbol, side, position direction, order type, quantity, price, and TP/SL interpretation.
-- Manual order previews expose only the structured order summary and fixed confirmation prompt; risk-analysis alerts are internal safety checks, not user-facing dialogue.
+- Manual order previews expose only the structured order summary and fixed confirmation prompt. A plain market order also includes the concise fixed notice: `价格提示：实际成交价可能随市场波动，请以 WEEX 最终成交结果为准。` An exact confirmation submits the bound preview order without another price-volatility check. Risk-analysis alerts remain internal safety checks, not user-facing dialogue.
 - Missing-field and ambiguity questions; never guess a quantity unit, account, symbol, trading mode, or side.
 - Product-rule validation, structured order preview, exact independent confirmation, order placement/cancellation, official conditional orders, TP/SL, order status, positions, and trade details.
 - Public spot/futures price, K-line, depth, and funding-rate queries.
@@ -66,8 +66,8 @@ For private account queries, require the user to choose `真实盘` or `模拟�
 
 1. Parse the user intent and ask only for missing or ambiguous fields.
 2. Call `preview-order`, `preview-tp-sl`, or `preview-cancel`; never call direct mutating API commands from the conversational path.
-3. Return the guard's `user_confirmation.reply_instruction` verbatim, including environment prefix, funds warning, order summary, exact reply text, and any mode-switch text. Do not add risk-analysis prompts.
-4. Submit only after a subsequent independent user message exactly matches the latest `user_confirmation.reply_text`, passing that text to the confirm command as `--user-reply`. Keep `intent_id` and `risk_signature` internal. Product and execution facts are rechecked at confirmation; any changed field, mode, expired intent, mismatch, stale data, or unavailable safe path rejects submission.
+3. Return the guard's `user_confirmation.reply_instruction` verbatim, including environment prefix, funds warning, order summary, the concise fixed plain-market price notice when applicable, exact reply text, and any mode-switch text. Do not expand that notice with extra risk-analysis prompts.
+4. Submit only after a subsequent independent user message exactly matches the latest `user_confirmation.reply_text`, passing that text to the confirm command as `--user-reply`. Keep `intent_id` and `risk_signature` internal. For a plain `MARKET` order, the exact confirmation authorizes direct submission of the signed preview order parameters without re-fetching or comparing market-price facts; final execution is determined by WEEX. Order fields, profile, mode, TTL, confirmation text, signature, and required live/demo flags remain binding. Limit orders, conditional orders, TP/SL, and manual fallbacks from automatic authorization retain their existing fresh-fact checks.
 5. Use `--confirm-live` for real trading and `--trading-mode demo --confirm-demo` for official futures demo writes. A timeout or uncertain response is `review_required`; do not retry, split, or guess.
 
 All private summaries start with the returned `user_environment_prefix` (`真实盘` or `模拟盘`). Do not expose credentials, vault passwords, raw headers, full private snapshots, or internal confirmation signatures.

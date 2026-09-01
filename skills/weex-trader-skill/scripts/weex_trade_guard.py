@@ -102,6 +102,30 @@ def _positive_decimal(value: Any, field: str) -> str | None:
     return str(value).strip()
 
 
+def _normalize_manual_order_type(raw_order: dict[str, Any], order_type: str) -> dict[str, Any]:
+    normalized = dict(raw_order)
+    if order_type and normalized.get("type") in (None, ""):
+        normalized["type"] = order_type
+    return normalized
+
+
+def _is_plain_market_raw_order(raw_order: dict[str, Any]) -> bool:
+    order_type = str(
+        raw_order.get("order_type") or raw_order.get("orderType") or raw_order.get("type") or ""
+    ).strip().upper()
+    if order_type != "MARKET":
+        return False
+    attached_fields = (
+        "tpTriggerPrice",
+        "slTriggerPrice",
+        "tp_trigger_price",
+        "sl_trigger_price",
+        "position_id",
+        "positionId",
+    )
+    return all(raw_order.get(field) in (None, "") for field in attached_fields)
+
+
 def validate_manual_order(market: str, raw_order: dict[str, Any]) -> list[str]:
     """Validate the conversational order shape before any account/API call."""
     normalized_market = str(market or "").strip().lower()
@@ -114,6 +138,13 @@ def validate_manual_order(market: str, raw_order: dict[str, Any]) -> list[str]:
     side = str(raw_order.get("side") or "").strip().upper()
     if side not in {"BUY", "SELL"}:
         errors.append("side must be BUY or SELL")
+    order_type_alias_values = {
+        str(raw_order[field]).strip().upper()
+        for field in ("order_type", "orderType", "type")
+        if raw_order.get(field) not in (None, "")
+    }
+    if len(order_type_alias_values) > 1:
+        errors.append("order_type, orderType, and type must not conflict")
     order_type = str(raw_order.get("order_type") or raw_order.get("orderType") or raw_order.get("type") or "").strip().upper()
     conditional = normalized_market == "futures" and order_type in {
         "STOP",
@@ -1728,6 +1759,15 @@ def _format_en_order_summary(preview_context: dict[str, Any] | None) -> str:
     return f"Order: {symbol} {market}, {order_type} {action}, quantity {quantity}{price_text}{trigger_text}."
 
 
+def _market_price_warning(language: str) -> str:
+    if language == "zh":
+        return "价格提示：实际成交价可能随市场波动，请以 WEEX 最终成交结果为准。"
+    return (
+        "Price notice: The actual execution price may fluctuate with the market. "
+        "Please refer to the final WEEX execution result."
+    )
+
+
 def _build_zh_confirmation_instruction(
     *,
     environment: dict[str, Any],
@@ -1735,6 +1775,7 @@ def _build_zh_confirmation_instruction(
     include_mode_switch: bool,
     auto_trade_authorization_hint: str | None,
     reply_text: str,
+    market_price_recheck_skipped: bool,
 ) -> tuple[str, str | None]:
     mode = _confirmation_environment_label(environment, language="zh")
     uses_real_funds = bool(environment.get("uses_real_funds"))
@@ -1751,9 +1792,10 @@ def _build_zh_confirmation_instruction(
         f"{mode}订单预览已生成，订单尚未提交。",
         "",
         _format_zh_order_summary(preview_context),
-        "",
-        confirm_line,
     ]
+    if market_price_recheck_skipped:
+        lines.extend(["", _market_price_warning("zh")])
+    lines.extend(["", confirm_line])
     switch_text = None
     if include_mode_switch:
         switch_text = _switch_reply_text(environment, language="zh")
@@ -1771,6 +1813,7 @@ def _build_en_confirmation_instruction(
     include_mode_switch: bool,
     auto_trade_authorization_hint: str | None,
     reply_text: str,
+    market_price_recheck_skipped: bool,
 ) -> tuple[str, str | None]:
     mode = _confirmation_environment_label(environment, language="en")
     uses_real_funds = bool(environment.get("uses_real_funds"))
@@ -1788,9 +1831,10 @@ def _build_en_confirmation_instruction(
         preview_line,
         "",
         _format_en_order_summary(preview_context),
-        "",
-        confirm_line,
     ]
+    if market_price_recheck_skipped:
+        lines.extend(["", _market_price_warning("en")])
+    lines.extend(["", confirm_line])
     switch_text = None
     if include_mode_switch:
         switch_text = _switch_reply_text(environment, language="en")
@@ -1808,6 +1852,7 @@ def _build_user_confirmation(
     preview_context: dict[str, Any] | None = None,
     include_mode_switch: bool = False,
     include_auto_trade_authorization_hint: bool = False,
+    market_price_recheck_skipped: bool = False,
 ) -> dict[str, str]:
     resolved_language = resolve_language(language)
     prompt = CONFIRMATION_PROMPTS[resolved_language]
@@ -1826,6 +1871,7 @@ def _build_user_confirmation(
                 include_mode_switch=include_mode_switch,
                 auto_trade_authorization_hint=auto_trade_authorization_hint,
                 reply_text=prompt["reply_text"],
+                market_price_recheck_skipped=market_price_recheck_skipped,
             )
         else:
             reply_instruction, switch_text = _build_en_confirmation_instruction(
@@ -1834,6 +1880,7 @@ def _build_user_confirmation(
                 include_mode_switch=include_mode_switch,
                 auto_trade_authorization_hint=auto_trade_authorization_hint,
                 reply_text=prompt["reply_text"],
+                market_price_recheck_skipped=market_price_recheck_skipped,
             )
     result = {
         "language": resolved_language,
@@ -2384,6 +2431,11 @@ def _submit_live_tp_sl_order(*, profile_name: str | None, raw_order: dict[str, A
 def cmd_preview_order(args: argparse.Namespace, *, now_ms: int | None = None) -> int:
     raw_order = _parse_order_json(args.order_json)
     trading_mode = _normalize_trading_mode(_arg_value(args, "trading_mode", DEFAULT_TRADING_MODE))
+    order_type = str(
+        raw_order.get("order_type") or raw_order.get("orderType") or raw_order.get("type") or ""
+    ).strip().upper()
+    raw_order = _normalize_manual_order_type(raw_order, order_type)
+    plain_market_order = _is_plain_market_raw_order(raw_order)
     validation_errors = validate_manual_order(args.market, raw_order)
     if validation_errors:
         _output_json(
@@ -2396,7 +2448,6 @@ def cmd_preview_order(args: argparse.Namespace, *, now_ms: int | None = None) ->
             args.pretty,
         )
         return 1
-    order_type = str(raw_order.get("order_type") or raw_order.get("orderType") or raw_order.get("type") or "").strip().upper()
     if trading_mode == "demo" and order_type in {"STOP", "TAKE_PROFIT", "STOP_MARKET", "TAKE_PROFIT_MARKET"}:
         _output_error("demo_conditional_order_unsupported: official demo conditional orders are unavailable", args.pretty)
         return 1
@@ -2437,7 +2488,7 @@ def cmd_preview_order(args: argparse.Namespace, *, now_ms: int | None = None) ->
         ttl_seconds=args.ttl_seconds,
         confirmation_reply_text=CONFIRMATION_PROMPTS[confirmation_language]["reply_text"],
         confirmation_language=confirmation_language,
-        freshness_required=True,
+        freshness_required=not plain_market_order,
     )
     save_intent(intent)
     response = _confirmation_only_response(
@@ -2456,6 +2507,7 @@ def cmd_preview_order(args: argparse.Namespace, *, now_ms: int | None = None) ->
         preview_context=confirmation_context,
         include_mode_switch=True,
         include_auto_trade_authorization_hint=True,
+        market_price_recheck_skipped=plain_market_order,
     )
     _output_json(response, args.pretty)
     return 0

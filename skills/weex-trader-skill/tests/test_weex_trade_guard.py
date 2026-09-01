@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import tempfile
@@ -23,6 +24,40 @@ import weex_spot_api  # noqa: E402
 
 
 class TradeGuardRegressionTests(unittest.TestCase):
+    @staticmethod
+    def _spot_preview_payload_from_raw(raw_order: dict[str, object]) -> dict[str, object]:
+        order_type = str(raw_order.get("order_type") or raw_order.get("type") or "").upper()
+        return {
+            "environment": {"trading_mode": "live", "market": "spot", "uses_real_funds": True},
+            "order_preview": {
+                "market": "spot",
+                "symbol": raw_order.get("symbol"),
+                "side": str(raw_order.get("side") or "").upper(),
+                "position_side": None,
+                "order_type": order_type,
+                "quantity": float(raw_order["quantity"]),
+                "price": None,
+                "time_in_force": None,
+            },
+            "product_facts": {
+                "status": "TRADING",
+                "enableTrade": True,
+                "stepSize": "0.000001",
+                "minTradeAmount": "0.000001",
+                "maxTradeAmount": "100",
+            },
+            "account_snapshot": {"quote_available_balance": "100"},
+            "positions": [],
+            "recent_orders": [],
+            "open_orders": [],
+            "conditional_orders": [],
+            "market_snapshot": {"symbol": "BTCUSDT", "current_price": 78300},
+            "tp_sl": {"has_take_profit": False, "has_stop_loss": False},
+            "partial": False,
+            "degraded_reasons": ["spot_tp_sl_state_unavailable"],
+            "constraints": [],
+        }
+
     def test_manual_order_validation_rejects_missing_and_invalid_fields(self) -> None:
         missing = weex_trade_guard.validate_manual_order(
             "futures", {"side": "BUY", "positionSide": "LONG", "type": "MARKET", "quantity": "1"}
@@ -41,6 +76,25 @@ class TradeGuardRegressionTests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(invalid), 4)
         self.assertTrue(any("price" in item for item in invalid))
+
+    def test_preview_rejects_conflicting_order_type_aliases_before_aggregation(self) -> None:
+        args = argparse.Namespace(
+            profile="profile",
+            market="spot",
+            trading_mode="live",
+            order_json=(
+                '{"symbol":"BTCUSDT","side":"BUY","orderType":"MARKET",'
+                '"type":"LIMIT","quantity":"0.000253"}'
+            ),
+            ttl_seconds=300,
+            language="zh",
+            pretty=False,
+        )
+        with mock.patch.object(weex_trade_guard, "TradeDataAggregator") as aggregator, mock.patch(
+            "sys.stdout.write", side_effect=lambda value: None
+        ):
+            self.assertEqual(weex_trade_guard.cmd_preview_order(args), 1)
+        aggregator.assert_not_called()
 
     def test_product_rules_reject_minimum_step_and_tick_mismatches(self) -> None:
         facts = {
@@ -208,6 +262,169 @@ class TradeGuardRegressionTests(unittest.TestCase):
             )
         )
 
+    def test_market_confirmation_uses_concise_price_notice(self) -> None:
+        confirmation = weex_trade_guard._build_user_confirmation(
+            "zh",
+            environment={"trading_mode": "live", "market": "spot", "uses_real_funds": True},
+            preview_context={
+                "order_preview": {
+                    "market": "spot",
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "order_type": "MARKET",
+                    "quantity": "0.000253",
+                }
+            },
+            market_price_recheck_skipped=True,
+        )
+        text = confirmation["reply_instruction"]
+        self.assertIn(
+            "价格提示：实际成交价可能随市场波动，请以 WEEX 最终成交结果为准。",
+            text,
+        )
+        self.assertNotIn("滑点", text)
+        self.assertNotIn("确认后系统不会再次", text)
+        english = weex_trade_guard._build_user_confirmation(
+            "en",
+            environment={"trading_mode": "live", "market": "spot", "uses_real_funds": True},
+            preview_context={
+                "order_preview": {
+                    "market": "spot",
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "order_type": "MARKET",
+                    "quantity": "0.000253",
+                }
+            },
+            market_price_recheck_skipped=True,
+        )["reply_instruction"]
+        self.assertIn(
+            "Price notice: The actual execution price may fluctuate with the market. "
+            "Please refer to the final WEEX execution result.",
+            english,
+        )
+        limit_text = weex_trade_guard._build_user_confirmation(
+            "zh",
+            environment={"trading_mode": "live", "market": "spot", "uses_real_funds": True},
+            preview_context={
+                "order_preview": {
+                    "market": "spot",
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "order_type": "LIMIT",
+                    "quantity": "0.000253",
+                    "price": "78000",
+                }
+            },
+        )["reply_instruction"]
+        self.assertNotIn("价格提示", limit_text)
+
+    def test_market_confirm_submits_signed_preview_order_without_refreshing_price_facts(self) -> None:
+        args = argparse.Namespace(
+            profile="profile",
+            market="spot",
+            trading_mode="live",
+            order_json='{"symbol":"BTCUSDT","side":"BUY","type":"MARKET","quantity":"0.000253"}',
+            ttl_seconds=300,
+            language="zh",
+            pretty=False,
+        )
+        payload = self._spot_preview_payload_from_raw(json.loads(args.order_json))
+        fake = types.SimpleNamespace(collect_order_risk_payload=mock.Mock(return_value=payload))
+        with tempfile.TemporaryDirectory() as tempdir, mock.patch.dict(
+            os.environ, {"WEEX_TRADER_SKILL_HOME": tempdir}, clear=False
+        ), mock.patch.object(
+            weex_trade_guard, "TradeDataAggregator", return_value=fake
+        ), mock.patch("sys.stdout.write", side_effect=lambda value: None):
+            self.assertEqual(weex_trade_guard.cmd_preview_order(args, now_ms=1000), 0)
+            intent = weex_order_intent_state.load_intent()
+            self.assertFalse(intent["freshness_required"])
+            confirm_args = argparse.Namespace(
+                intent_id=intent["intent_id"],
+                risk_signature=intent["risk_signature"],
+                trading_mode="live",
+                confirm_live=True,
+                confirm_demo=False,
+                user_reply="确认",
+                profile="profile",
+                language="zh",
+                pretty=False,
+            )
+            with mock.patch.object(weex_trade_guard, "TradeDataAggregator") as refresh, mock.patch.object(
+                weex_trade_guard, "_submit_live_order", return_value={"orderId": "spot-1"}
+            ) as submitter:
+                self.assertEqual(weex_trade_guard.cmd_confirm_order(confirm_args, now_ms=1001), 0)
+            refresh.assert_not_called()
+            submitter.assert_called_once()
+            self.assertEqual(submitter.call_args.kwargs["raw_order"], intent["raw_order"])
+
+    def test_order_type_alias_uses_the_same_market_warning_and_freshness_classification(self) -> None:
+        args = argparse.Namespace(
+            profile="profile",
+            market="spot",
+            trading_mode="live",
+            order_json='{"symbol":"BTCUSDT","side":"BUY","orderType":"MARKET","quantity":"0.000253"}',
+            ttl_seconds=300,
+            language="zh",
+            pretty=False,
+        )
+
+        class FakeAggregator:
+            def collect_order_risk_payload(self, **kwargs):
+                return TradeGuardRegressionTests._spot_preview_payload_from_raw(kwargs["raw_order"])
+
+        with tempfile.TemporaryDirectory() as tempdir, mock.patch.dict(
+            os.environ, {"WEEX_TRADER_SKILL_HOME": tempdir}, clear=False
+        ), mock.patch.object(
+            weex_trade_guard, "TradeDataAggregator", return_value=FakeAggregator()
+        ):
+            output: list[str] = []
+            with mock.patch("sys.stdout.write", side_effect=lambda value: output.append(value)):
+                self.assertEqual(weex_trade_guard.cmd_preview_order(args, now_ms=1000), 0)
+            result = json.loads("".join(output))
+            intent = weex_order_intent_state.load_intent()
+        self.assertFalse(intent["freshness_required"])
+        self.assertIn("type", intent["raw_order"])
+        self.assertEqual(intent["raw_order"]["type"], "MARKET")
+        self.assertIn(
+            "价格提示：实际成交价可能随市场波动，请以 WEEX 最终成交结果为准。",
+            result["user_confirmation"]["reply_instruction"],
+        )
+
+    def test_market_order_with_attached_tp_sl_keeps_fresh_fact_checks(self) -> None:
+        args = argparse.Namespace(
+            profile="profile",
+            market="spot",
+            trading_mode="live",
+            order_json=(
+                '{"symbol":"BTCUSDT","side":"BUY","type":"MARKET","quantity":"0.000253",'
+                '"tpTriggerPrice":"90000"}'
+            ),
+            ttl_seconds=300,
+            language="zh",
+            pretty=False,
+        )
+
+        class FakeAggregator:
+            def collect_order_risk_payload(self, **kwargs):
+                return TradeGuardRegressionTests._spot_preview_payload_from_raw(kwargs["raw_order"])
+
+        with tempfile.TemporaryDirectory() as tempdir, mock.patch.dict(
+            os.environ, {"WEEX_TRADER_SKILL_HOME": tempdir}, clear=False
+        ), mock.patch.object(
+            weex_trade_guard, "TradeDataAggregator", return_value=FakeAggregator()
+        ):
+            output: list[str] = []
+            with mock.patch("sys.stdout.write", side_effect=lambda value: output.append(value)):
+                self.assertEqual(weex_trade_guard.cmd_preview_order(args, now_ms=1000), 0)
+            result = json.loads("".join(output))
+            intent = weex_order_intent_state.load_intent()
+        self.assertTrue(intent["freshness_required"])
+        self.assertNotIn(
+            "价格提示",
+            result["user_confirmation"]["reply_instruction"],
+        )
+
     def test_preview_order_public_payload_hides_risk_analysis_fields(self) -> None:
         args = argparse.Namespace(
             profile="profile",
@@ -286,7 +503,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
                 else:
                     os.environ["WEEX_TRADER_SKILL_HOME"] = old_home
 
-    def test_confirm_rejects_changed_account_or_market_facts(self) -> None:
+    def test_limit_confirm_still_rejects_changed_account_or_market_facts(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             old_home = os.environ.get("WEEX_TRADER_SKILL_HOME")
             os.environ["WEEX_TRADER_SKILL_HOME"] = tempdir
@@ -295,14 +512,26 @@ class TradeGuardRegressionTests(unittest.TestCase):
                     profile="profile",
                     market="futures",
                     trading_mode="live",
-                    order_json='{"symbol":"BTCUSDT","side":"BUY","positionSide":"LONG","type":"MARKET","quantity":"1"}',
+                    order_json=(
+                        '{"symbol":"BTCUSDT","side":"BUY","positionSide":"LONG",'
+                        '"type":"LIMIT","quantity":"1","price":"100","timeInForce":"GTC"}'
+                    ),
                     ttl_seconds=300,
                     language="zh",
                     pretty=False,
                 )
                 base_payload = {
                     "environment": {"trading_mode": "live", "market": "futures", "uses_real_funds": True},
-                    "order_preview": {"market": "futures", "symbol": "BTCUSDT", "side": "BUY", "position_side": "LONG", "order_type": "MARKET", "quantity": 1},
+                    "order_preview": {
+                        "market": "futures",
+                        "symbol": "BTCUSDT",
+                        "side": "BUY",
+                        "position_side": "LONG",
+                        "order_type": "LIMIT",
+                        "quantity": 1,
+                        "price": 100,
+                        "time_in_force": "GTC",
+                    },
                     "product_facts": {"status": "TRADING", "minOrderSize": "0.001", "maxOrderSize": "100", "quantityPrecision": 3},
                     "partial": False,
                     "degraded_reasons": [],
@@ -340,6 +569,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
                 ):
                     self.assertEqual(weex_trade_guard.cmd_preview_order(args, now_ms=1000), 0)
                 intent = weex_order_intent_state.load_intent()
+                self.assertTrue(intent["freshness_required"])
                 confirm_args = argparse.Namespace(
                     intent_id=intent["intent_id"],
                     risk_signature=intent["risk_signature"],

@@ -38,6 +38,8 @@ python3 scripts/weex_trade_guard.py confirm-order --profile <name> --language zh
 
 Use `preview-tp-sl`/`confirm-tp-sl` for official futures TP/SL. The confirmation command must consume the exact reply text from the latest independent preview via `--user-reply`; changed fields, mode, expired intents, stale facts, and mismatches are rejected. Real writes require `--confirm-live`; official futures demo writes require `--trading-mode demo --confirm-demo`.
 
+A plain `MARKET` preview includes the concise fixed notice: `价格提示：实际成交价可能随市场波动，请以 WEEX 最终成交结果为准。` Once the user sends the exact independent confirmation, the guard submits the signed preview order parameters without re-fetching or comparing market-price facts. This exception does not change the 300-second TTL, intent signature, profile/mode binding, confirmation flags, uncertain-submission handling, or the fresh-fact checks for limit orders, conditional orders, TP/SL, and automatic-authorization fallbacks.
+
 Order cancellation uses the same binding:
 
 ```bash

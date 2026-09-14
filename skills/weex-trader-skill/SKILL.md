@@ -10,8 +10,12 @@ This repository is the only source of truth. The skill is OpenClaw-only and keep
 Before every private query, order preview/confirmation, or automatic-order operation, run:
 
 ```bash
-python3 scripts/weex_agent_state.py --command skill.preflight --language zh --pretty
+python3 scripts/weex_agent_state.py --command skill.preflight --pretty
 ```
+
+The host should pass the current user's language explicitly to user-facing commands with
+`--language zh` or `--language en`; the preflight command above does not select a default language.
+If the host provides no language and no cached preference exists, the user-facing fallback is English (`en`).
 
 Stop if runtime requirements are not ready, modules are missing, environment validation fails, or `runtime.credentials.complete` is false.
 

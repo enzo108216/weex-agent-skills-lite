@@ -3,8 +3,12 @@
 Run commands from the skill root. Before private work:
 
 ```bash
-python3 scripts/weex_agent_state.py --command skill.preflight --language zh --pretty
+python3 scripts/weex_agent_state.py --command skill.preflight --pretty
 ```
+
+Pass the current user's language explicitly to user-facing commands with `--language zh` or
+`--language en`; do not treat the preflight command as a language selection. When neither is
+provided and no cached preference exists, the fallback language is English (`en`).
 
 Continue only when runtime requirements and `runtime.env_validation.ok` are valid and `runtime.credentials.complete` is true. Configure `WEEX_API_KEY`, `WEEX_API_SECRET`, and `WEEX_API_PASSPHRASE` together outside argv/chat.
 
@@ -22,11 +26,11 @@ Private queries require an explicit internal `live`/`demo` mode, displayed to us
 ## Guarded orders
 
 ```bash
-python3 scripts/weex_trade_guard.py preview-order --market futures --trading-mode live --order-json '{...}' --language zh --pretty
-python3 scripts/weex_trade_guard.py confirm-order --intent-id <id> --risk-signature <signature> --trading-mode live --user-reply '确认' --confirm-live --language zh --pretty
+python3 scripts/weex_trade_guard.py preview-order --market futures --trading-mode live --order-json '{...}' --pretty
+python3 scripts/weex_trade_guard.py confirm-order --intent-id <id> --risk-signature <signature> --trading-mode live --user-reply '<exact-confirmation-text>' --confirm-live --pretty
 
-python3 scripts/weex_trade_guard.py preview-cancel --market futures --order-id <id> --language zh --pretty
-python3 scripts/weex_trade_guard.py confirm-cancel --intent-id <id> --risk-signature <signature> --user-reply '确认' --confirm-live --pretty
+python3 scripts/weex_trade_guard.py preview-cancel --market futures --order-id <id> --pretty
+python3 scripts/weex_trade_guard.py confirm-cancel --intent-id <id> --risk-signature <signature> --user-reply '<exact-confirmation-text>' --confirm-live --pretty
 ```
 
 Use `preview-tp-sl`/`confirm-tp-sl` for official Futures TP/SL. The latest intent binds order fields, environment account, mode, TTL, and confirmation text. A plain market order may skip a second price comparison after exact confirmation; other safety bindings and uncertain-submission handling remain.

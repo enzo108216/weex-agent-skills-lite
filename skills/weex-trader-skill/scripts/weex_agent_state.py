@@ -226,6 +226,13 @@ def _clear_runtime_sensitive_module_cache() -> None:
     return None
 
 
+def _resolve_agent_language(preferred_language: Optional[str]) -> tuple[Optional[str], str]:
+    """Resolve an explicit language without creating an implicit cached preference."""
+    if preferred_language is None or not preferred_language.strip():
+        return None, "unset"
+    return resolve_language_with_source(preferred_language)
+
+
 def _raise_private_runtime_preflight_error(
     *,
     command: Optional[str],
@@ -301,7 +308,7 @@ def ensure_private_runtime_ready(
 
 
 def build_agent_init_state(preferred_language: str | None = None) -> dict[str, Any]:
-    resolved_language, language_source = resolve_language_with_source(preferred_language)
+    resolved_language, language_source = _resolve_agent_language(preferred_language)
     os_family = platform.system()
     credential_presence = {
         name: bool(_clean_text(os.getenv(name)))
@@ -342,7 +349,7 @@ def build_agent_runtime_state(
     preferred_language: str | None = None,
     command: Optional[str] = None,
 ) -> dict[str, Any]:
-    resolved_language, _language_source = resolve_language_with_source(preferred_language)
+    resolved_language, _language_source = _resolve_agent_language(preferred_language)
     os_family = platform.system()
     requirements_ready, missing_modules = _probe_required_modules()
     env_validation = validate_runtime_environment()
@@ -424,7 +431,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--language",
         default=None,
-        help="Optional zh/en language value to persist into agent-init.json",
+        help="Optional explicit zh/en language value; omit to clear the cached preference",
     )
     parser.add_argument(
         "--command",

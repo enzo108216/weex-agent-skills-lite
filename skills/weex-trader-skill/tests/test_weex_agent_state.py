@@ -35,6 +35,26 @@ class AgentStateEnvironmentOnlyTests(unittest.TestCase):
         )
         self.assertEqual(payload["credentials"]["source"], "environment")
 
+    def test_preflight_without_language_clears_previous_cached_preference(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            init_path = Path(tempdir) / agent_state.AGENT_INIT_FILENAME
+            init_path.write_text(
+                json.dumps({"language": {"preferred": "zh"}}),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"WEEX_TRADER_SKILL_HOME": tempdir},
+                clear=True,
+            ):
+                records = agent_state.refresh_agent_records(command="skill.preflight")
+
+                self.assertEqual(
+                    records["init"]["language"],
+                    {"preferred": None, "source": "unset"},
+                )
+                self.assertEqual(agent_state.resolve_language_with_source(), ("en", "default"))
+
     def test_runtime_reports_presence_without_exposing_values(self) -> None:
         credentials = {
             "WEEX_API_KEY": "env-api-key",

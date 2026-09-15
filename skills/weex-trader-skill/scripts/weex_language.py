@@ -1,62 +1,47 @@
 #!/usr/bin/env python3
-"""Language helpers for the localized WEEX Trader CLI."""
+"""Strict language validation for the localized WEEX Trader CLI."""
 
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
+from dataclasses import dataclass
+from typing import Literal
+
+SUPPORTED_LANGUAGES = ("zh", "en")
+LanguageSource = Literal["explicit", "detected", "fallback"]
 
 
-CONFIG_HOME_ENV = "WEEX_TRADER_SKILL_HOME"
-AGENT_INIT_FILENAME = "agent-init.json"
+@dataclass(frozen=True)
+class LanguageContext:
+    language: str
+    source: LanguageSource
+
+
+class LanguageRequiredError(ValueError):
+    """Raised when a localized operation does not receive an explicit language."""
 
 
 def normalize_language(value: str | None) -> str:
-    raw = (value or "").strip().lower().replace("-", "_")
+    """Normalize an explicit language value without a cached or fallback preference."""
+    if not isinstance(value, str) or not value.strip():
+        raise LanguageRequiredError("--language is required; choose zh or en")
+
+    raw = value.strip().lower().replace("-", "_")
     if raw.startswith("zh") or raw in {"cn", "zh_cn", "zh_tw", "zh_hk"} or "chinese" in raw:
         return "zh"
-    return "en"
+    if raw.startswith("en") or raw in {"english", "en_us", "en_gb"}:
+        return "en"
+    raise LanguageRequiredError("language must be zh or en")
 
 
-def config_dir() -> Path:
-    raw = os.getenv(CONFIG_HOME_ENV)
-    if raw:
-        return Path(raw).expanduser()
-    return Path.home() / ".weex-trader-skill"
+def resolve_language(language: str | None) -> str:
+    """Validate and return the explicitly selected language."""
+    return normalize_language(language)
 
 
-def agent_init_path() -> Path:
-    return config_dir() / AGENT_INIT_FILENAME
-
-
-def load_cached_language() -> str | None:
-    path = agent_init_path()
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    language = payload.get("language")
-    if not isinstance(language, dict):
-        return None
-    preferred = language.get("preferred")
-    if not isinstance(preferred, str) or not preferred.strip():
-        return None
-    return normalize_language(preferred)
-
-
-def resolve_language_with_source(preferred: str | None = None) -> tuple[str, str]:
-    if preferred:
-        return normalize_language(preferred), "explicit"
-    cached = load_cached_language()
-    if cached:
-        return cached, "cached"
-    return "en", "default"
-
-
-def resolve_language(preferred: str | None = None) -> str:
-    return resolve_language_with_source(preferred)[0]
+def resolve_language_context(
+    language: str | None,
+    *,
+    source: LanguageSource = "explicit",
+) -> LanguageContext:
+    """Build the per-invocation language context; never reads persisted preferences."""
+    return LanguageContext(language=resolve_language(language), source=source)

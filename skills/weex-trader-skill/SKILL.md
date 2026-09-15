@@ -10,12 +10,12 @@ This repository is the only source of truth. The skill is OpenClaw-only and keep
 Before every private query, order preview/confirmation, or automatic-order operation, run:
 
 ```bash
-python3 scripts/weex_agent_state.py --command skill.preflight --pretty
+python3 scripts/weex_agent_state.py --command skill.preflight --language en --pretty
 ```
 
-The host should pass the current user's language explicitly to user-facing commands with
-`--language zh` or `--language en`; the preflight command above does not select a default language.
-If the host provides no language and no cached preference exists, the user-facing fallback is English (`en`).
+The host must pass the current user's language explicitly to every user-facing command with
+`--language zh` or `--language en`. If the host cannot determine the user's language, it must pass
+`--language en` for that invocation. Language is per invocation and is never persisted as a preference.
 
 Stop if runtime requirements are not ready, modules are missing, environment validation fails, or `runtime.credentials.complete` is false.
 
@@ -29,12 +29,14 @@ The runtime derives an opaque account binding from the credentials and selected 
 
 ## Routing
 
-- `scripts/weex_contract_api.py`: Futures market/private account/order/cancel and official Futures demo REST.
+- `scripts/weex_contract_api.py`: Live Futures market/private account/order/cancel REST.
 - `scripts/weex_spot_api.py`: Spot market/private account/order/cancel REST.
 - `scripts/weex_trade_guard.py`: `preview-order`, `preview-tp-sl`, `confirm-order`, `confirm-tp-sl`, `preview-cancel`, `confirm-cancel`.
 - `scripts/weex_order_intent_state.py`: preview identity, TTL, environment-account and risk-signature binding.
 - `scripts/weex_auto_trade.py`: stable JSON facade for strategy registration, authorization, guarded submission, reconciliation, events, snapshots, and restore.
 - `scripts/weex_auto_trade_state.py`, `weex_auto_trade_amount.py`, `weex_auto_trade_runtime.py`, `weex_auto_trade_notify.py`: authorization state, conservative valuation, official facts, notification, and recovery implementation.
+- `scripts/weex_message_templates.py`: shared zh/en user-facing templates for confirmations, automatic-trading fallback, and notifications.
+- `scripts/weex_user_presenter.py`: user-facing presentation boundary; domain modules do not compose localized reply text directly.
 - `scripts/weex_trade_data_aggregator.py`: internal official account/market facts for guards; not a conversational analysis/replay surface.
 - `scripts/weex_agent_state.py`: non-secret preflight and environment readiness summary.
 - `scripts/weex_api_credentials.py`: the sole account credential loader and environment-account binding implementation.
@@ -43,13 +45,13 @@ Use only operations in `references/contract-api-definitions.json` and `reference
 
 ## Account queries and safe order flow
 
-Private account queries require the user to choose `真实盘` or `模拟盘` before calling private commands. Demo trading means official Futures demo REST; Spot demo and unsupported demo endpoints fail closed. Every private summary starts with the returned `user_environment_prefix`.
+Private account queries operate on the real environment only. Every private summary starts with the returned `user_environment_prefix` and includes the real-funds warning.
 
 1. Parse intent and ask only for missing/ambiguous fields; never guess quantity unit, symbol, side, or mode.
 2. Call the appropriate preview command; never call a direct mutating API command from conversation.
 3. Return `user_confirmation.reply_instruction` verbatim.
 4. Submit only after a later independent message exactly matches `user_confirmation.reply_text`, using the current intent ID/risk signature internally. Order fields, environment account, mode, TTL, confirmation text, and required flags remain bound.
-5. Use `--confirm-live` for real trading and `--trading-mode demo --confirm-demo` for official Futures demo writes. A timeout or uncertain response is `REVIEW_REQUIRED`; never retry, split, or guess.
+5. Use `--confirm-live` for every mutating request. Demo modes, Demo flags and simulated endpoints are removed and fail closed before any request. A timeout or uncertain response is `REVIEW_REQUIRED`; never retry, split, or guess.
 
 A plain market order may skip a second price comparison after exact confirmation, but all other confirmation, account, mode, TTL, and submission-uncertainty guards remain. Limit, conditional, TP/SL, and automatic-fallback paths retain fresh-fact checks.
 
@@ -64,6 +66,8 @@ Automatic authorization is environment-account-bound and real-trading-only. It n
 - Full-position TP/SL and unproven reduce-only paths remain manual. Hard constraints, state conflicts, expired/revoked authorization, unsupported operations, or incomplete facts block every write.
 - Reconciliation never changes accepted conservative quota. Snapshots/restores remain owner-only local controls; restore revokes active authorizations, preserves unresolved usage, and never acts on exchange orders.
 - Existing saved-profile authorizations are not migrated. After upgrading, register and explicitly authorize the current environment account.
+- `submit-auto` requires a `language` field (or CLI `--language zh|en`) for manual fallback and notification text. The selected confirmation word is persisted with the intent and must match exactly.
+- Review the complete template coverage in `references/message-templates.md`; add `zh` and `en` together for every new user-facing template.
 
 Local state controls misuse/corruption; they are not identity authentication or tamper-proofing against an attacker controlling the same OS user, Agent, process environment, or API key.
 
@@ -71,4 +75,4 @@ Local state controls misuse/corruption; they are not identity authentication or 
 
 Do not expose Analysis, Monitor, Partner, replay, profile analysis, deep account-risk reports, local price/PnL monitor loops, or non-OpenClaw installation. Price-threshold closes use official WEEX conditional orders.
 
-Never send a mutating request without its required confirmation flag. Never return stale/default private data after an API error, retry an uncertain order, expose credentials/internal account IDs/raw headers, or treat a missing demo equivalent as a real-trading equivalent.
+Never send a mutating request without `--confirm-live`. Never return stale/default private data after an API error, retry an uncertain order, expose credentials/internal account IDs/raw headers, or accept a Demo mode as a real-trading equivalent.

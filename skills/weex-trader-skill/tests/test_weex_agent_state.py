@@ -17,11 +17,12 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import weex_agent_state as agent_state  # noqa: E402
+import weex_language  # noqa: E402
 
 
 class AgentStateEnvironmentOnlyTests(unittest.TestCase):
     def test_init_routes_every_private_flow_to_complete_environment_credentials(self) -> None:
-        payload = agent_state.build_agent_init_state("zh")
+        payload = agent_state.build_agent_init_state()
 
         self.assertNotIn("profiles", payload)
         self.assertNotIn("vault", payload)
@@ -35,13 +36,8 @@ class AgentStateEnvironmentOnlyTests(unittest.TestCase):
         )
         self.assertEqual(payload["credentials"]["source"], "environment")
 
-    def test_preflight_without_language_clears_previous_cached_preference(self) -> None:
+    def test_agent_state_does_not_persist_language_preference(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
-            init_path = Path(tempdir) / agent_state.AGENT_INIT_FILENAME
-            init_path.write_text(
-                json.dumps({"language": {"preferred": "zh"}}),
-                encoding="utf-8",
-            )
             with mock.patch.dict(
                 os.environ,
                 {"WEEX_TRADER_SKILL_HOME": tempdir},
@@ -49,11 +45,27 @@ class AgentStateEnvironmentOnlyTests(unittest.TestCase):
             ):
                 records = agent_state.refresh_agent_records(command="skill.preflight")
 
-                self.assertEqual(
-                    records["init"]["language"],
-                    {"preferred": None, "source": "unset"},
-                )
-                self.assertEqual(agent_state.resolve_language_with_source(), ("en", "default"))
+                self.assertNotIn("language", records["init"])
+                self.assertNotIn("language", records["runtime"])
+                self.assertNotIn("language", agent_state.agent_init_path().read_text())
+                self.assertNotIn("language", agent_state.agent_runtime_path().read_text())
+
+    def test_language_resolution_requires_an_explicit_supported_language(self) -> None:
+        with self.assertRaises(weex_language.LanguageRequiredError):
+            weex_language.resolve_language(None)
+        with self.assertRaises(weex_language.LanguageRequiredError):
+            weex_language.resolve_language("fr")
+        self.assertEqual(weex_language.resolve_language("zh"), "zh")
+        self.assertEqual(weex_language.resolve_language("en"), "en")
+
+    def test_language_context_preserves_invocation_source_without_persistence(self) -> None:
+        context = weex_language.resolve_language_context("en", source="fallback")
+        self.assertEqual(context.language, "en")
+        self.assertEqual(context.source, "fallback")
+
+    def test_preflight_requires_language_argument_without_persisting_it(self) -> None:
+        with self.assertRaises(SystemExit):
+            agent_state.main(["--command", "skill.preflight", "--pretty"])
 
     def test_runtime_reports_presence_without_exposing_values(self) -> None:
         credentials = {
@@ -119,7 +131,6 @@ class AgentStateEnvironmentOnlyTests(unittest.TestCase):
             }
             with mock.patch.dict(os.environ, env, clear=True):
                 records = agent_state.refresh_agent_records(
-                    preferred_language="en",
                     command="test.preflight",
                 )
                 init_path = agent_state.agent_init_path()

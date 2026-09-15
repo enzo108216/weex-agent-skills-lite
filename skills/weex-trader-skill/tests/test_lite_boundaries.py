@@ -12,6 +12,42 @@ SCRIPTS = ROOT / "scripts"
 
 
 class LiteBoundaryTests(unittest.TestCase):
+    def test_runtime_trading_surface_is_live_only(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import weex_contract_api  # type: ignore
+        import weex_spot_api  # type: ignore
+        import weex_trade_data_aggregator  # type: ignore
+        import weex_trade_guard  # type: ignore
+
+        self.assertEqual(weex_contract_api.TRADING_MODES, ("live",))
+        self.assertEqual(weex_spot_api.TRADING_MODES, ("live",))
+        self.assertEqual(weex_trade_data_aggregator.TRADING_MODES, ("live",))
+        self.assertEqual(weex_trade_guard.TRADING_MODES, ("live",))
+
+        for normalize in (
+            weex_contract_api.normalize_trading_mode,
+            weex_spot_api.normalize_trading_mode,
+            weex_trade_data_aggregator._normalize_trading_mode,
+            weex_trade_guard._normalize_trading_mode,
+        ):
+            with self.subTest(normalize=normalize):
+                with self.assertRaisesRegex((SystemExit, ValueError), "DEMO_MODE_REMOVED"):
+                    normalize("demo")
+
+    def test_contract_runtime_registry_excludes_simulated_endpoints(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import weex_contract_api  # type: ignore
+
+        self.assertFalse(any(key.startswith("sim.") for key in weex_contract_api.ENDPOINTS))
+
+    def test_low_level_environment_payloads_are_structured_not_presentational(self) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import weex_contract_api  # type: ignore
+        import weex_spot_api  # type: ignore
+
+        self.assertNotIn("notice", weex_contract_api.environment_for_mode("live"))
+        self.assertNotIn("notice", weex_spot_api.private_environment())
+
     def test_project_contains_only_the_trader_skill(self) -> None:
         skill_dirs = sorted(
             path.name

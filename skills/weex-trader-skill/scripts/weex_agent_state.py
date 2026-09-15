@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from weex_language import resolve_language_with_source
+from weex_language import resolve_language
 from weex_url_policy import BaseUrlPolicyError, validate_weex_base_url
 
 
@@ -196,10 +196,8 @@ def _dependency_install_command(os_family: Optional[str] = None) -> str:
     return f"{launcher} -m pip install --require-hashes -r {requirements_lock_path()}"
 
 
-def _run_runtime_setup(language: Optional[str] = None) -> dict[str, Any]:
+def _run_runtime_setup() -> dict[str, Any]:
     command = [sys.executable, str(runtime_setup_script_path())]
-    if language:
-        command.extend(["--language", language])
     completed = subprocess.run(
         command,
         text=True,
@@ -224,13 +222,6 @@ def _run_runtime_setup(language: Optional[str] = None) -> dict[str, Any]:
 
 def _clear_runtime_sensitive_module_cache() -> None:
     return None
-
-
-def _resolve_agent_language(preferred_language: Optional[str]) -> tuple[Optional[str], str]:
-    """Resolve an explicit language without creating an implicit cached preference."""
-    if preferred_language is None or not preferred_language.strip():
-        return None, "unset"
-    return resolve_language_with_source(preferred_language)
 
 
 def _raise_private_runtime_preflight_error(
@@ -282,7 +273,6 @@ def ensure_private_runtime_ready(
     command: Optional[str] = None,
     *,
     auto_setup: bool = False,
-    language: Optional[str] = None,
 ) -> None:
     requirements_ready, missing_modules = _probe_required_modules()
     env_validation = validate_runtime_environment()
@@ -291,7 +281,7 @@ def ensure_private_runtime_ready(
 
     setup_result: Optional[dict[str, Any]] = None
     if auto_setup and missing_modules and env_validation["ok"]:
-        setup_result = _run_runtime_setup(language=language)
+        setup_result = _run_runtime_setup()
         importlib.invalidate_caches()
         _clear_runtime_sensitive_module_cache()
         requirements_ready, missing_modules = _probe_required_modules()
@@ -307,8 +297,7 @@ def ensure_private_runtime_ready(
     )
 
 
-def build_agent_init_state(preferred_language: str | None = None) -> dict[str, Any]:
-    resolved_language, language_source = _resolve_agent_language(preferred_language)
+def build_agent_init_state() -> dict[str, Any]:
     os_family = platform.system()
     credential_presence = {
         name: bool(_clean_text(os.getenv(name)))
@@ -318,10 +307,6 @@ def build_agent_init_state(preferred_language: str | None = None) -> dict[str, A
     return {
         "schema_version": 1,
         "last_refreshed_at": _now_iso(),
-        "language": {
-            "preferred": resolved_language,
-            "source": language_source,
-        },
         "host": {
             "os_family": os_family,
             "os_release": platform.release(),
@@ -346,10 +331,8 @@ def build_agent_init_state(preferred_language: str | None = None) -> dict[str, A
 
 
 def build_agent_runtime_state(
-    preferred_language: str | None = None,
     command: Optional[str] = None,
 ) -> dict[str, Any]:
-    resolved_language, _language_source = _resolve_agent_language(preferred_language)
     os_family = platform.system()
     requirements_ready, missing_modules = _probe_required_modules()
     env_validation = validate_runtime_environment()
@@ -362,9 +345,6 @@ def build_agent_runtime_state(
         "schema_version": 1,
         "last_verified_at": _now_iso(),
         "command": command,
-        "language": {
-            "preferred": resolved_language,
-        },
         "host": {
             "os_family": os_family,
             "launcher": _launcher_for_os(os_family),
@@ -385,34 +365,26 @@ def build_agent_runtime_state(
     }
 
 
-def refresh_agent_init_state(preferred_language: str | None = None) -> dict[str, Any]:
-    payload = build_agent_init_state(preferred_language=preferred_language)
+def refresh_agent_init_state() -> dict[str, Any]:
+    payload = build_agent_init_state()
     _atomic_write_json(agent_init_path(), payload)
     return payload
 
 
 def refresh_agent_runtime_state(
-    preferred_language: str | None = None,
     command: Optional[str] = None,
 ) -> dict[str, Any]:
-    payload = build_agent_runtime_state(
-        preferred_language=preferred_language,
-        command=command,
-    )
+    payload = build_agent_runtime_state(command=command)
     _atomic_write_json(agent_runtime_path(), payload)
     return payload
 
 
 def refresh_agent_records(
-    preferred_language: str | None = None,
     command: Optional[str] = None,
 ) -> dict[str, dict[str, Any]]:
     return {
-        "init": refresh_agent_init_state(preferred_language=preferred_language),
-        "runtime": refresh_agent_runtime_state(
-            preferred_language=preferred_language,
-            command=command,
-        ),
+        "init": refresh_agent_init_state(),
+        "runtime": refresh_agent_runtime_state(command=command),
     }
 
 
@@ -430,8 +402,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--language",
-        default=None,
-        help="Optional explicit zh/en language value; omit to clear the cached preference",
+        required=True,
+        choices=("zh", "en"),
+        help="Explicit language for this invocation; it is never persisted as a preference",
     )
     parser.add_argument(
         "--command",
@@ -444,10 +417,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    payload = refresh_agent_records(
-        preferred_language=args.language,
-        command=args.command,
-    )
+    resolve_language(args.language)
+    payload = refresh_agent_records(command=args.command)
     _output_json(payload, args.pretty)
     return 0
 

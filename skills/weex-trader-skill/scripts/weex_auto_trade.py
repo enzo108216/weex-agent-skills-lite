@@ -20,6 +20,8 @@ from weex_auto_trade_state import (
     build_verified_usage_evidence,
 )
 from weex_agent_state import RuntimePreflightError, ensure_private_runtime_ready
+from weex_language import resolve_language
+from weex_user_presenter import present_manual_fallback
 from weex_trade_guard import (
     _validate_official_order_semantics,
     resolve_official_auto_trade_operation,
@@ -80,6 +82,7 @@ COMMAND_SCHEMAS: dict[str, tuple[set[str], set[str]]] = {
             "idempotency_key",
             "operation_key",
             "orders",
+            "language",
         },
         set(),
     ),
@@ -99,10 +102,17 @@ COMMAND_SCHEMAS: dict[str, tuple[set[str], set[str]]] = {
 
 
 class FacadeError(ValueError):
-    def __init__(self, code: str, message: str, next_action: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        next_action: str,
+        params: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.next_action = next_action
+        self.params = dict(params or {})
 
 
 def state_db_path() -> Path:
@@ -170,17 +180,28 @@ class AutoTradeFacade:
                 operation_lock = candidate
         with operation_lock:
             result = handler(payload, confirm_live=confirm_live)
-            self._schedule_accepted_summary_worker(command, payload, result)
-        self._dispatch_post_commit_notifications()
+            self._schedule_accepted_summary_worker(
+                command,
+                payload,
+                result,
+                language=payload.get("language") if command == "submit-auto" else None,
+            )
+        self._dispatch_post_commit_notifications(
+            language=payload["language"] if command == "submit-auto" else "en"
+        )
         return result
 
-    def _dispatch_post_commit_notifications(self) -> None:
+    def _dispatch_post_commit_notifications(self, *, language: str) -> None:
         if self.notification_adapter is None:
             return
         try:
             from weex_auto_trade_notify import dispatch_notification_claims
 
-            dispatch_notification_claims(self.state, self.notification_adapter)
+            dispatch_notification_claims(
+                self.state,
+                self.notification_adapter,
+                language=resolve_language(language),
+            )
         except Exception:
             # Notification delivery is a post-commit projection, never a business transition.
             return
@@ -190,6 +211,8 @@ class AutoTradeFacade:
         command: str,
         payload: dict[str, Any],
         result: dict[str, Any],
+        *,
+        language: str,
     ) -> None:
         if self.notification_worker_launcher is None or command != "submit-auto":
             return
@@ -209,6 +232,7 @@ class AutoTradeFacade:
                 state_path=self.state.db_path,
                 notification_key=target["notification_key"],
                 not_before=target["not_before"],
+                language=resolve_language(language),
             )
         except Exception:
             # Worker launch is best-effort and cannot change a committed order result.
@@ -458,7 +482,12 @@ class AutoTradeFacade:
         }
 
     def _submit_auto(self, payload: dict[str, Any], *, confirm_live: bool) -> dict[str, Any]:
-        _strict_fields(payload, required=COMMAND_SCHEMAS["submit-auto"][0])
+        required, optional = COMMAND_SCHEMAS["submit-auto"]
+        _strict_fields(payload, required=required, optional=optional)
+        language = payload.get("language")
+        if not isinstance(language, str):
+            raise FacadeError("INVALID_REQUEST", "language must be zh or en", "FIX_REQUEST")
+        language = resolve_language(language)
         account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
         self._assert_strategy_account(strategy_id, account)
@@ -575,34 +604,21 @@ class AutoTradeFacade:
                 operation_key=operation_key,
                 orders=orders,
                 guard_result=result,
+                language=language,
             )
             if intent is not None:
                 writer = self.manual_intent_writer or _save_manual_fallback_intent
                 writer(intent)
-                authorization_hint = (
-                    "如需取消二次确认功能，可申请自动交易授权。授权后，在指定交易类型、交易对、"
-                    "单笔金额和有效期范围内，下单无需逐笔确认。发送“申请自动交易授权”即可开始配置。"
-                )
                 is_authorization_miss = error_code in {
                     "AUTHORIZATION_NOT_ACTIVE",
                     "SCOPE_MISMATCH",
                     "SINGLE_LIMIT_EXCEEDED",
                     "TOTAL_LIMIT_EXCEEDED",
                 }
-                notice = (
-                    "本次订单超过自动交易授权范围，尚未下单。"
-                    if is_authorization_miss
-                    else "本次订单未进入自动交易执行，尚未下单。"
+                confirmation = present_manual_fallback(
+                    language,
+                    authorization_miss=is_authorization_miss,
                 )
-                confirmation_lines = [
-                    notice,
-                    "",
-                    "请核对 order_preview 中的完整订单。",
-                    "",
-                    "确认后回复：确认",
-                ]
-                if is_authorization_miss:
-                    confirmation_lines.extend(["", authorization_hint])
                 result = {
                     **result,
                     "intent_id": intent["intent_id"],
@@ -610,14 +626,14 @@ class AutoTradeFacade:
                     "risk_signature": intent["risk_signature"],
                     "order_preview": intent["order_preview"],
                     "user_confirmation": {
-                        "language": "zh",
-                        "reply_text": "确认",
-                        "reply_instruction": "\n".join(confirmation_lines),
+                        "language": confirmation["language"],
+                        "reply_text": confirmation["reply_text"],
+                        "reply_instruction": confirmation["reply_instruction"],
                     },
                     "next_action": "CONFIRM_ORDER_MANUALLY",
                 }
                 if is_authorization_miss:
-                    result["authorization_hint"] = authorization_hint
+                    result["authorization_hint"] = confirmation["authorization_hint"]
         return _public_auto_result(
             result,
             strategy_id=strategy_id,
@@ -844,6 +860,7 @@ def _build_manual_fallback_intent(
     operation_key: str,
     orders: list[dict[str, Any]],
     guard_result: dict[str, Any],
+    language: str,
 ) -> dict[str, Any] | None:
     from weex_order_intent_state import build_intent
 
@@ -889,8 +906,11 @@ def _build_manual_fallback_intent(
         raw_order=dict(orders[0]),
         analysis_output=analysis_output,
         now_ms=int(time.time() * 1000),
-        confirmation_reply_text="确认",
-        confirmation_language="zh",
+        confirmation_reply_text=present_manual_fallback(
+            language,
+            authorization_miss=False,
+        )["reply_text"],
+        confirmation_language=resolve_language(language),
         freshness_required=False,
     )
     intent.update(
@@ -1122,10 +1142,15 @@ def _load_input(source: str) -> dict[str, Any]:
     return payload
 
 
-def _error_payload(code: str, message: str, next_action: str) -> dict[str, Any]:
+def _error_payload(
+    code: str,
+    message: str,
+    next_action: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "ok": False,
-        "error": {"code": code, "message": message},
+        "error": {"code": code, "params": dict(params or {}), "message": message},
         "next_action": next_action,
     }
 
@@ -1165,6 +1190,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Required for live authorization, automatic submission, and recovery transitions",
     )
+    parser.add_argument(
+        "--language",
+        choices=("zh", "en"),
+        default=None,
+        help="Required for submit-auto user-facing fallback and notifications.",
+    )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     return parser
 
@@ -1173,13 +1204,22 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         payload = _load_input(args.input)
+        if args.language is not None:
+            if args.command != "submit-auto":
+                raise FacadeError(
+                    "INVALID_REQUEST",
+                    "--language is supported only for submit-auto",
+                    "FIX_REQUEST",
+                )
+            payload["language"] = args.language
+        if args.command == "submit-auto" and args.language is None:
+            raise FacadeError("INVALID_REQUEST", "--language is required for submit-auto", "FIX_REQUEST")
         _reject_raw_credentials(payload)
         _validate_command_payload(args.command, payload)
         try:
             ensure_private_runtime_ready(
                 command=f"auto-trade.{args.command}",
                 auto_setup=True,
-                language=None,
             )
         except RuntimePreflightError as exc:
             raise FacadeError(
@@ -1230,7 +1270,7 @@ def main(argv: list[str] | None = None) -> int:
         response = facade.execute(args.command, payload, confirm_live=args.confirm_live)
         exit_code = 0
     except FacadeError as exc:
-        response = _error_payload(exc.code, str(exc), exc.next_action)
+        response = _error_payload(exc.code, str(exc), exc.next_action, exc.params)
         exit_code = 2
     except StateConflictError:
         response = _error_payload(

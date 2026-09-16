@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import subprocess
 import sys
 import unittest
@@ -39,6 +40,8 @@ class LiteBoundaryTests(unittest.TestCase):
         import weex_contract_api  # type: ignore
 
         self.assertFalse(any(key.startswith("sim.") for key in weex_contract_api.ENDPOINTS))
+        self.assertNotIn("confirm_demo", inspect.signature(weex_contract_api.execute_endpoint_payload).parameters)
+        self.assertNotIn("--confirm-demo", weex_contract_api.build_parser().format_help())
 
     def test_low_level_environment_payloads_are_structured_not_presentational(self) -> None:
         sys.path.insert(0, str(SCRIPTS))

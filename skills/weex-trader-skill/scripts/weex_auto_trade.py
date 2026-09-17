@@ -513,7 +513,7 @@ class AutoTradeFacade:
         _strict_fields(payload, required=required, optional=optional)
         language = payload.get("language")
         if not isinstance(language, str):
-            raise FacadeError("INVALID_REQUEST", "language must be zh or en", "FIX_REQUEST")
+            raise FacadeError("INVALID_REQUEST", "language must be a supported locale", "FIX_REQUEST")
         language = resolve_language(language)
         account = self._account()
         strategy_id = _required_text(payload["strategy_id"], "strategy_id")
@@ -1219,14 +1219,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--language",
-        choices=("zh", "en"),
         default=None,
-        help="Render language for submit-auto fallback and notifications; defaults to the language decision.",
+        help="Render locale for submit-auto fallback and notifications; defaults to the language decision.",
     )
     parser.add_argument(
         "--input-language",
         default=None,
-        help="Detected user language (BCP-47 or unknown); unsupported values fall back to English.",
+        help="Detected user locale (BCP-47 or unknown); unknown values fall back to en-US.",
     )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     return parser

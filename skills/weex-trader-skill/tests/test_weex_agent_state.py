@@ -53,26 +53,28 @@ class AgentStateEnvironmentOnlyTests(unittest.TestCase):
     def test_language_resolution_requires_an_explicit_supported_language(self) -> None:
         with self.assertRaises(weex_language.LanguageRequiredError):
             weex_language.resolve_language(None)
-        with self.assertRaises(weex_language.LanguageRequiredError):
-            weex_language.resolve_language("fr")
-        self.assertEqual(weex_language.resolve_language("zh"), "zh")
-        self.assertEqual(weex_language.resolve_language("en"), "en")
+        self.assertEqual(weex_language.resolve_language("fr"), "fr")
+        self.assertEqual(weex_language.resolve_language("ja"), "ja")
+        self.assertEqual(weex_language.resolve_language("en_us"), "en-US")
+        self.assertEqual(weex_language.resolve_language("pt_br"), "pt-BR")
+        self.assertEqual(weex_language.resolve_language("zh"), "zh-CN")
+        self.assertEqual(weex_language.resolve_language("en"), "en-US")
 
     def test_language_context_preserves_invocation_source_without_persistence(self) -> None:
         context = weex_language.resolve_language_context("en", source="fallback")
-        self.assertEqual(context.language, "en")
+        self.assertEqual(context.language, "en-US")
         self.assertEqual(context.source, "fallback")
 
     def test_detected_unsupported_language_falls_back_to_english(self) -> None:
-        decision = weex_language.resolve_language_decision("ja")
-        self.assertEqual(decision.input_language, "ja")
-        self.assertEqual(decision.render_language, "en")
+        decision = weex_language.resolve_language_decision("xx")
+        self.assertEqual(decision.input_language, "xx")
+        self.assertEqual(decision.render_language, "en-US")
         self.assertEqual(decision.source, "fallback")
         self.assertEqual(decision.fallback_reason, "unsupported_language")
 
         unknown = weex_language.resolve_language_decision(None)
         self.assertIsNone(unknown.input_language)
-        self.assertEqual(unknown.render_language, "en")
+        self.assertEqual(unknown.render_language, "en-US")
         self.assertEqual(unknown.source, "fallback")
         self.assertEqual(unknown.fallback_reason, "language_undetermined")
 
@@ -81,13 +83,13 @@ class AgentStateEnvironmentOnlyTests(unittest.TestCase):
             "ja",
             confidence=0.99,
         )
-        self.assertEqual(decision.render_language, "en")
-        self.assertNotEqual(decision.render_language, "zh")
-        self.assertEqual(decision.fallback_reason, "unsupported_language")
+        self.assertEqual(decision.render_language, "ja")
+        self.assertNotEqual(decision.render_language, "zh-CN")
+        self.assertIsNone(decision.fallback_reason)
 
     def test_low_confidence_language_detection_falls_back_to_english(self) -> None:
         decision = weex_language.resolve_language_decision("zh", confidence=0.4)
-        self.assertEqual(decision.render_language, "en")
+        self.assertEqual(decision.render_language, "en-US")
         self.assertEqual(decision.source, "fallback")
         self.assertEqual(decision.fallback_reason, "low_confidence")
 

@@ -18,10 +18,10 @@ python3 scripts/weex_agent_state.py --command skill.preflight --pretty
 ```
 
 Preflight is machine-only and is language-neutral. For user-facing commands, the host must pass the
-latest message's detected language with `--input-language` and may pass an explicit render language
-with `--language zh|en`. The resolver maps unsupported or undetermined input languages to English;
-it never maps them to Chinese. Detection confidence below `0.8` also falls back to English. A detected `zh` input must render `zh`, and a detected `en` input
-must render `en`; conflicting values fail closed. Language decisions are invocation-scoped and are
+latest message's detected locale with `--input-language` and may pass an explicit render locale with
+`--language`. The supported locale set is declared by `references/locales/*.json`. Unknown or
+undetermined input falls back to `en-US`; detection confidence below `0.8` also falls back to
+`en-US`. A detected locale must match the render locale; conflicting values fail closed. Language decisions are invocation-scoped and are
 never read from memory, previous assistant messages, or persisted preferences.
 
 Stop if runtime requirements are not ready, modules are missing, environment validation fails, or `runtime.credentials.complete` is false.
@@ -73,7 +73,7 @@ Automatic authorization is environment-account-bound and real-trading-only. It n
 - Full-position TP/SL and unproven reduce-only paths remain manual. Hard constraints, state conflicts, expired/revoked authorization, unsupported operations, or incomplete facts block every write.
 - Reconciliation never changes accepted conservative quota. Snapshots/restores remain owner-only local controls; restore revokes active authorizations, preserves unresolved usage, and never acts on exchange orders.
 - Existing saved-profile authorizations are not migrated. After upgrading, register and explicitly authorize the current environment account.
-- `submit-auto` accepts `input_language` plus an optional `language` render override for manual fallback and notification text. Unsupported/unknown input languages resolve to English. The selected confirmation word is persisted with the intent and must match exactly.
+- `submit-auto` accepts `input_language` plus an optional `language` render override for manual fallback and notification text. Unknown input resolves to `en-US`. The selected confirmation locale and word are persisted with the intent and must match exactly.
 - Review the complete template coverage in `references/message-templates.md`; add `zh` and `en` together for every new user-facing template.
 
 Local state controls misuse/corruption; they are not identity authentication or tamper-proofing against an attacker controlling the same OS user, Agent, process environment, or API key.

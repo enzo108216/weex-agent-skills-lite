@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import unittest
 from string import Formatter
 from pathlib import Path
@@ -18,26 +19,29 @@ import weex_user_presenter as presenter  # noqa: E402
 
 class WeexMessageTemplateTests(unittest.TestCase):
     def test_supported_languages_have_the_same_template_ids(self) -> None:
-        self.assertEqual(set(templates.MESSAGE_TEMPLATES), {"zh", "en"})
-        self.assertFalse(any("demo" in key.lower() for key in templates.MESSAGE_TEMPLATES["zh"]))
-        self.assertFalse(any("demo" in key.lower() for key in templates.MESSAGE_TEMPLATES["en"]))
+        self.assertEqual(set(templates.MESSAGE_TEMPLATES), set(weex_language.SUPPORTED_LANGUAGES))
+        self.assertEqual(len(templates.MESSAGE_TEMPLATES), 23)
+        locale_dir = ROOT / "references" / "locales"
+        for locale in weex_language.SUPPORTED_LANGUAGES:
+            self.assertTrue((locale_dir / f"{locale}.json").exists(), locale)
+            self.assertEqual(json.loads((locale_dir / f"{locale}.json").read_text())["locale"], locale)
         self.assertEqual(
-            set(templates.MESSAGE_TEMPLATES["zh"]),
-            set(templates.MESSAGE_TEMPLATES["en"]),
+            set(templates.MESSAGE_TEMPLATES["zh-CN"]),
+            set(templates.MESSAGE_TEMPLATES["en-US"]),
         )
 
     def test_supported_languages_have_matching_template_placeholders(self) -> None:
         formatter = Formatter()
-        for template_id in templates.MESSAGE_TEMPLATES["en"]:
+        for template_id in templates.MESSAGE_TEMPLATES["en-US"]:
             with self.subTest(template_id=template_id):
                 en_fields = {
                     name
-                    for _, name, _, _ in formatter.parse(templates.MESSAGE_TEMPLATES["en"][template_id])
+                    for _, name, _, _ in formatter.parse(templates.MESSAGE_TEMPLATES["en-US"][template_id])
                     if name
                 }
                 zh_fields = {
                     name
-                    for _, name, _, _ in formatter.parse(templates.MESSAGE_TEMPLATES["zh"][template_id])
+                    for _, name, _, _ in formatter.parse(templates.MESSAGE_TEMPLATES["zh-CN"][template_id])
                     if name
                 }
                 self.assertEqual(en_fields, zh_fields)
@@ -48,11 +52,11 @@ class WeexMessageTemplateTests(unittest.TestCase):
         chinese = templates.build_manual_fallback_confirmation("zh", authorization_miss=True)
         english = templates.build_manual_fallback_confirmation("en", authorization_miss=True)
 
-        self.assertEqual(chinese["language"], "zh")
+        self.assertEqual(chinese["language"], "zh-CN")
         self.assertEqual(chinese["reply_text"], "确认")
         self.assertIn("本次订单超过自动交易授权范围，尚未下单", chinese["reply_instruction"])
         self.assertIn("确认后回复：确认", chinese["reply_instruction"])
-        self.assertEqual(english["language"], "en")
+        self.assertEqual(english["language"], "en-US")
         self.assertEqual(english["reply_text"], "confirm")
         self.assertIn("was not submitted", english["reply_instruction"])
         self.assertIn("After confirming, reply: confirm", english["reply_instruction"])
@@ -110,7 +114,7 @@ class WeexMessageTemplateTests(unittest.TestCase):
 
     def test_user_presenter_owns_confirmation_text(self) -> None:
         result = presenter.present_user_confirmation(
-            "en",
+            "en-US",
             environment={
                 "trading_mode": "live",
                 "market": "futures",
@@ -118,11 +122,11 @@ class WeexMessageTemplateTests(unittest.TestCase):
             },
             preview_context={"order_preview": {"symbol": "BTCUSDT", "type": "MARKET"}},
         )
-        self.assertEqual(result["language"], "en")
+        self.assertEqual(result["language"], "en-US")
         self.assertEqual(result["reply_text"], "confirm")
         self.assertIn("real trading", result["reply_instruction"])
 
-    def test_unsupported_detected_language_renders_fixed_text_in_english(self) -> None:
+    def test_supported_detected_language_renders_native_fixed_text(self) -> None:
         decision = weex_language.resolve_language_decision("ja")
         context = weex_language.language_context_from_decision(decision)
         result = presenter.present_user_confirmation(
@@ -134,12 +138,12 @@ class WeexMessageTemplateTests(unittest.TestCase):
             },
             preview_context={"order_preview": {"symbol": "BTCUSDT", "type": "MARKET"}},
         )
-        self.assertEqual(result["language"], "en")
-        self.assertEqual(result["language_source"], "fallback")
+        self.assertEqual(result["language"], "ja")
+        self.assertEqual(result["language_source"], "detected")
         self.assertEqual(result["input_language"], "ja")
-        self.assertEqual(result["fallback_reason"], "unsupported_language")
-        self.assertEqual(result["reply_text"], "confirm")
-        self.assertIn("Current trading mode: real trading", result["reply_instruction"])
+        self.assertNotIn("fallback_reason", result)
+        self.assertEqual(result["reply_text"], "確認")
+        self.assertIn("現在の取引モード", result["reply_instruction"])
         self.assertNotIn("真实盘", result["reply_instruction"])
 
     def test_user_message_contract_contains_language_template_and_text(self) -> None:
@@ -147,7 +151,7 @@ class WeexMessageTemplateTests(unittest.TestCase):
             "zh",
             "guard.pending_order_expired",
         )
-        self.assertEqual(message.language, "zh")
+        self.assertEqual(message.language, "zh-CN")
         self.assertEqual(message.template_id, "guard.pending_order_expired")
         self.assertIn("重新生成预览", message.text)
 

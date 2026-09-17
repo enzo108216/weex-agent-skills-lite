@@ -37,7 +37,7 @@ class TradeGuardRegressionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.environment_patch.stop()
 
-    def test_trade_guard_language_gate_maps_unsupported_input_to_english(self) -> None:
+    def test_trade_guard_language_gate_maps_supported_input_to_locale(self) -> None:
         args = weex_trade_guard.build_parser().parse_args(
             [
                 "preview-order",
@@ -50,9 +50,9 @@ class TradeGuardRegressionTests(unittest.TestCase):
             ]
         )
         weex_trade_guard._resolve_cli_language(args)
-        self.assertEqual(args.language, "en")
-        self.assertEqual(args.language_decision.source, "fallback")
-        self.assertEqual(args.language_decision.fallback_reason, "unsupported_language")
+        self.assertEqual(args.language, "ja")
+        self.assertEqual(args.language_decision.source, "detected")
+        self.assertIsNone(args.language_decision.fallback_reason)
 
     def test_trade_guard_language_gate_rejects_conflicting_render_language(self) -> None:
         args = weex_trade_guard.build_parser().parse_args(

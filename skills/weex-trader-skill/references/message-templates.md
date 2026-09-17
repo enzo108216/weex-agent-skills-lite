@@ -6,29 +6,32 @@
 
 ## 语言规则
 
-- 支持语言：`zh`、`en`。
-- 宿主只根据最新用户消息生成语言决策；`zh` 使用中文，`en` 使用英文，其他或未知语种固定文案降级为英文。
-- `input_language` 与 `language`（渲染语言）是两个不同字段；检测到非支持语种时不得覆盖为 `zh`。
+- 支持语言由 `references/locales/*.json` 声明，包括 `en-US`、`zh-CN`、`zh-TW`、`ko`、`ja`、`vi`、`id`、`th`、`fa-IR`、`ar`、`tr`、`de`、`fr`、`it`、`es-ES`、`pt-PT`、`pl`、`ru`、`uk`、`az`、`es-419`、`es-AR`、`pt-BR`。
+- 宿主只根据最新用户消息生成 locale 决策；已支持 locale 使用对应语言文件，未知或无法判断时固定文案降级为 `en-US`。
+- `input_language` 与 `language`（渲染 locale）是两个不同字段；未知输入不得覆盖为 `zh-CN`。
 - 英文兜底不写入全局配置。
 - 显式无效语言值必须拒绝。
 - intent 中的确认语言和确认词属于安全绑定，不是全局偏好。
 
 ## 模板覆盖索引
 
-| 模板命名空间 | 中文 | English | 消费方 |
-| --- | --- | --- | --- |
-| `confirmation.*` | 有 | 有 | Trade Guard、自动交易兜底 |
-| `manual_fallback.*` | 有 | 有 | 自动交易 Facade |
-| `environment.*` | 有 | 有 | Trade Guard 展示器 |
-| `label.*` / `action.*` | 有 | 有 | 订单摘要展示器 |
-| `order.*` / `price.notice` | 有 | 有 | Trade Guard 展示器 |
-| `guard.*` | 有 | 有 | Trade Guard 展示器 |
-| `url.*` | 有 | 有 | URL policy 展示边界 |
-| `notification.*` | 有 | 有 | 通知 adapter/worker |
+运行时 locale 文件位于 `references/locales/`。每个文件必须包含完整的 72 个模板 ID，
+并与 `en-US.json` 使用完全一致的占位符集合。
+
+| 模板命名空间 | locale 文件 | 消费方 |
+| --- | --- | --- |
+| `confirmation.*` | 全部 locale | Trade Guard、自动交易兜底 |
+| `manual_fallback.*` | 全部 locale | 自动交易 Facade |
+| `environment.*` | 全部 locale | Trade Guard 展示器 |
+| `label.*` / `action.*` | 全部 locale | 订单摘要展示器 |
+| `order.*` / `price.notice` | 全部 locale | Trade Guard 展示器 |
+| `guard.*` | 全部 locale | Trade Guard 展示器 |
+| `url.*` | 全部 locale | URL policy 展示边界 |
+| `notification.*` | 全部 locale | 通知 adapter/worker |
 
 ## 维护约束
 
-- 新增用户可见模板时，必须同时添加 `zh` 与 `en` 同名键。
-- 两种语言必须使用相同的占位符集合。
+- 新增用户可见模板时，必须在所有 locale 文件中添加同名键。
+- 所有 locale 必须使用相同的占位符集合。
 - 机器错误码、`next_action`、内部风控诊断和 WEEX 原始错误不放入此目录。
 - 内部字段只有在进入用户回复或通知正文前，才转换为模板 ID。

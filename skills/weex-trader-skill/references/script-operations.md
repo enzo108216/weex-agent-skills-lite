@@ -8,8 +8,8 @@ python3 scripts/weex_agent_state.py --command skill.preflight --pretty
 ```
 
 Preflight is language-neutral. For user-facing commands, pass `--input-language` from the latest
-user message. Use `--language zh|en` only to explicitly select a matching render language; an
-unsupported or unknown input language falls back to English and cannot be overridden to Chinese.
+user message. Use `--language <supported-locale>` only to explicitly select a matching render
+locale; unknown input falls back to `en-US` and cannot be overridden to `zh-CN`.
 Language is per invocation and is never persisted as a preference.
 
 Continue only when runtime requirements and `runtime.env_validation.ok` are valid and `runtime.credentials.complete` is true. Configure `WEEX_API_KEY`, `WEEX_API_SECRET`, and `WEEX_API_PASSPHRASE` together outside argv/chat.
@@ -62,12 +62,12 @@ python3 scripts/weex_auto_trade.py enable-auto-trading-after-restore --input @em
 
 Authorization requests require modules, symbol scope, conservative per-leg maximum, cumulative quota, and explicit `valid_hours` up to 720 hours. Granting changes local state but does not submit an order. Automatic writes still require fresh official facts, scope/quota checks, atomic reservations, durable audit, and `--confirm-live`. Uncertain results are never retried.
 
-`submit-auto` accepts `input_language` in JSON or `--input-language` on the CLI. An optional `language`/`--language zh|en` must agree with a supported detected input; unsupported and unknown inputs resolve to English. The exact selected confirmation word remains bound to the pending intent.
+`submit-auto` accepts `input_language` in JSON or `--input-language` on the CLI. An optional `language`/`--language <supported-locale>` must agree with the detected input; unknown inputs resolve to `en-US`. The exact selected confirmation locale and word remain bound to the pending intent.
 
 For example, a Japanese request should send `"input_language": "ja"` (or
-`--input-language ja`) and must not force `language`/`--language zh`; the resulting fixed
-confirmation text is English.
+`--input-language ja`) and must not force `language`/`--language zh-CN`; the resulting fixed
+confirmation text uses the Japanese locale file.
 
-The full user-facing template inventory and zh/en coverage matrix is in [`message-templates.md`](message-templates.md).
+The full user-facing template inventory and locale coverage matrix is in [`message-templates.md`](message-templates.md).
 
 Snapshots are owner-only local files, not encrypted or uploaded. Restore enables the kill switch, validates a registered snapshot, revokes restored active authorizations, preserves unresolved usage, and never acts on WEEX orders. Old saved-profile authorizations are intentionally not migrated to the current environment account.

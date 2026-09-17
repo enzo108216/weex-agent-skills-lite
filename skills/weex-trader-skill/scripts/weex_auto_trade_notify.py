@@ -236,7 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-path", required=True)
     parser.add_argument("--notification-key", required=True)
     parser.add_argument("--not-before", required=True)
-    parser.add_argument("--language", choices=("zh", "en"), required=True)
+    parser.add_argument("--language", required=True)
     return parser
 
 

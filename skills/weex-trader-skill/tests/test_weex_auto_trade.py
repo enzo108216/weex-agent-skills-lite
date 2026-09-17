@@ -3184,7 +3184,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             self.assertEqual(worker_call["not_before"].second, 0)
             self.assertEqual(worker_call["not_before"].microsecond, 0)
             self.assertEqual(worker_call["not_before"].tzinfo, UTC)
-            self.assertEqual(worker_call["language"], "zh")
+            self.assertEqual(worker_call["language"], "zh-CN")
 
     def test_submit_auto_manual_fallback_creates_bound_pending_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -3259,7 +3259,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             self.assertEqual(fallback_event["severity"], "EXCEPTION")
             self.assertEqual(fallback_event["payload"]["error_code"], "SINGLE_LIMIT_EXCEEDED")
 
-    def test_submit_auto_manual_fallback_maps_unsupported_input_language_to_english(self) -> None:
+    def test_submit_auto_manual_fallback_uses_supported_input_locale(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state, cli_module, profile, strategy, authorization = self._authorized_fixture(
                 Path(tempdir)
@@ -3304,18 +3304,17 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                     confirm_live=True,
                 )
 
-            self.assertEqual(result["user_confirmation"]["language"], "en")
-            self.assertEqual(result["user_confirmation"]["language_source"], "fallback")
+            self.assertEqual(result["user_confirmation"]["language"], "ja")
+            self.assertEqual(result["user_confirmation"]["language_source"], "detected")
             self.assertEqual(result["user_confirmation"]["input_language"], "ja")
-            self.assertEqual(result["user_confirmation"]["fallback_reason"], "unsupported_language")
-            self.assertEqual(result["language_source"], "fallback")
+            self.assertNotIn("fallback_reason", result["user_confirmation"])
+            self.assertEqual(result["language_source"], "detected")
             self.assertEqual(result["input_language"], "ja")
-            self.assertEqual(result["fallback_reason"], "unsupported_language")
-            self.assertEqual(result["user_confirmation"]["reply_text"], "confirm")
-            self.assertIn("was not submitted", result["user_confirmation"]["reply_instruction"])
-            self.assertIn("After confirming, reply: confirm", result["user_confirmation"]["reply_instruction"])
-            self.assertEqual(captured[0]["confirmation_language"], "en")
-            self.assertEqual(captured[0]["confirmation_reply_text"], "confirm")
+            self.assertNotIn("fallback_reason", result)
+            self.assertEqual(result["user_confirmation"]["reply_text"], "確認")
+            self.assertIn("確認後", result["user_confirmation"]["reply_instruction"])
+            self.assertEqual(captured[0]["confirmation_language"], "ja")
+            self.assertEqual(captured[0]["confirmation_reply_text"], "確認")
 
     def test_submit_auto_unknown_operation_does_not_create_unusable_confirmation_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -3739,7 +3738,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
         state = FakeState()
         results = notify_module.dispatch_notification_claims(state, adapter, language="zh")
 
-        self.assertEqual(received[0]["language"], "zh")
+        self.assertEqual(received[0]["language"], "zh-CN")
         self.assertIn("自动交易提醒", notify_module.build_notification_text(received[0])[0])
         self.assertEqual(results[0]["status"], "DELIVERED")
 
@@ -3754,7 +3753,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             )
 
         command = popen.call_args.args[0]
-        self.assertEqual(command[-2:], ["--language", "zh"])
+        self.assertEqual(command[-2:], ["--language", "zh-CN"])
 
     def test_recovery_commands_resolve_uncertain_usage_and_expose_enable_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

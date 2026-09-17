@@ -32,6 +32,6 @@ bash skills/weex-trader-skill/scripts/update_openclaw_skills.sh --dev
 
 自然语言订单必须先 `preview-order`，并将后续独立消息中的最新确认文本原样传给 confirm 命令的 `--user-reply`；所有写入均为真实盘并需要 `--confirm-live`，模拟盘、Demo 旗标和模拟端点均不支持。环境凭据或 API origin 变化后，旧确认和旧自动交易授权不可复用。
 
-OpenClaw 只根据最新用户消息决定语种：用户侧命令传入 `--input-language`；中文和英文分别渲染为 `zh`/`en`，其他或无法判断的语种固定文案统一降级为英文。Preflight 只输出机器状态，不参与用户语种渲染。
+OpenClaw 只根据最新用户消息决定 locale：用户侧命令传入 `--input-language`；已支持的 locale 使用对应语言文件，未知或无法判断的语种固定文案统一降级为 `en-US`。Preflight 只输出机器状态，不参与用户语种渲染。
 
 详细路由和自动授权命令见 [`skills/weex-trader-skill/SKILL.md`](skills/weex-trader-skill/SKILL.md) 与 [`skills/weex-trader-skill/references/script-operations.md`](skills/weex-trader-skill/references/script-operations.md)。

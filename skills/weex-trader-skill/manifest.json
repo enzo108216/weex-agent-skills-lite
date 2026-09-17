@@ -17,6 +17,7 @@
       "file_level_details": "file-index.json",
       "script_operations": "references/script-operations.md",
       "message_templates": "references/message-templates.md",
+      "locales": "references/locales/*.json",
       "openclaw_language_contract": "references/openclaw-language-contract.md",
       "user_presenter": "scripts/weex_user_presenter.py",
       "auth_and_signing": "references/auth-and-signing.md",

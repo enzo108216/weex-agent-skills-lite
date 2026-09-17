@@ -3030,8 +3030,8 @@ def build_parser() -> argparse.ArgumentParser:
     preview.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
     preview.add_argument("--order-json", required=True, help="JSON order payload.")
     preview.add_argument("--ttl-seconds", type=int, default=300, help="Intent TTL in seconds.")
-    preview.add_argument("--language", choices=("zh", "en"), default=None, help="Render language for human confirmation prompt.")
-    preview.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
+    preview.add_argument("--language", default=None, help="Render locale for human confirmation prompt.")
+    preview.add_argument("--input-language", default=None, help="Detected user locale; unknown values fall back to en-US.")
     preview.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     preview_tp_sl = subparsers.add_parser(
@@ -3042,8 +3042,8 @@ def build_parser() -> argparse.ArgumentParser:
     preview_tp_sl.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE, help="TP/SL trading mode; live only.")
     preview_tp_sl.add_argument("--tp-sl-json", required=True, help="JSON TP/SL conditional order payload.")
     preview_tp_sl.add_argument("--ttl-seconds", type=int, default=300, help="Intent TTL in seconds.")
-    preview_tp_sl.add_argument("--language", choices=("zh", "en"), default=None, help="Render language for human confirmation prompt.")
-    preview_tp_sl.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
+    preview_tp_sl.add_argument("--language", default=None, help="Render locale for human confirmation prompt.")
+    preview_tp_sl.add_argument("--input-language", default=None, help="Detected user locale; unknown values fall back to en-US.")
     preview_tp_sl.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     confirm = subparsers.add_parser("confirm-order", help="Submit the last previewed order.")
@@ -3052,8 +3052,8 @@ def build_parser() -> argparse.ArgumentParser:
     confirm.add_argument("--user-reply", default=None, help="Exact independent user confirmation text from the latest preview.")
     confirm.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
     confirm.add_argument("--confirm-live", action="store_true", help="Required before sending a real order.")
-    confirm.add_argument("--language", choices=("zh", "en"), default=None, help="Render language for user-facing environment prefix.")
-    confirm.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
+    confirm.add_argument("--language", default=None, help="Render locale for user-facing environment prefix.")
+    confirm.add_argument("--input-language", default=None, help="Detected user locale; unknown values fall back to en-US.")
     confirm.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     confirm_tp_sl = subparsers.add_parser(
@@ -3066,8 +3066,8 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_tp_sl.add_argument("--user-reply", default=None, help="Exact independent user confirmation text from the latest preview.")
     confirm_tp_sl.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
     confirm_tp_sl.add_argument("--confirm-live", action="store_true", help="Required before sending a real TP/SL order.")
-    confirm_tp_sl.add_argument("--language", choices=("zh", "en"), default=None, help="Render language for user-facing environment prefix.")
-    confirm_tp_sl.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
+    confirm_tp_sl.add_argument("--language", default=None, help="Render locale for user-facing environment prefix.")
+    confirm_tp_sl.add_argument("--input-language", default=None, help="Detected user locale; unknown values fall back to en-US.")
     confirm_tp_sl.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     preview_cancel = subparsers.add_parser("preview-cancel", help="Preview an order cancellation.")
@@ -3077,8 +3077,8 @@ def build_parser() -> argparse.ArgumentParser:
     preview_cancel.add_argument("--order-id", default=None)
     preview_cancel.add_argument("--client-oid", default=None)
     preview_cancel.add_argument("--ttl-seconds", type=int, default=300)
-    preview_cancel.add_argument("--language", choices=("zh", "en"), default=None)
-    preview_cancel.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
+    preview_cancel.add_argument("--language", default=None)
+    preview_cancel.add_argument("--input-language", default=None, help="Detected user locale; unknown values fall back to en-US.")
     preview_cancel.add_argument("--pretty", action="store_true")
 
     confirm_cancel = subparsers.add_parser("confirm-cancel", help="Submit the latest cancellation preview.")
@@ -3086,8 +3086,8 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_cancel.add_argument("--risk-signature", required=True)
     confirm_cancel.add_argument("--user-reply", required=True)
     confirm_cancel.add_argument("--confirm-live", action="store_true", help="Required before sending a real cancellation.")
-    confirm_cancel.add_argument("--language", choices=("zh", "en"), default=None)
-    confirm_cancel.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
+    confirm_cancel.add_argument("--language", default=None)
+    confirm_cancel.add_argument("--input-language", default=None, help="Detected user locale; unknown values fall back to en-US.")
     confirm_cancel.add_argument("--pretty", action="store_true")
 
     return parser

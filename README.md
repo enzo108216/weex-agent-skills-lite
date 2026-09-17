@@ -35,6 +35,8 @@ The project provides no saved-profile, Vault, argv, or JSON-payload credential p
 
 Every conversational order uses a guard preview and the exact confirmation text from the latest preview. All writes are live-only and require `--confirm-live`; Demo modes and simulated endpoints are not supported. Credentials, internal account IDs, and raw signed headers are never returned.
 
+OpenClaw language routing uses the latest user message only: pass `--input-language` to user-facing commands. Chinese and English render in `zh`/`en`; unsupported or undetermined languages fall back to English fixed text. Preflight is machine-only and language-neutral.
+
 This project excludes replay/profile analysis, deep account-risk interpretation, PnL monitor tasks, local automatic-close loops, Partner/referral APIs, and non-OpenClaw installers. Price-threshold closes use official WEEX conditional orders.
 
 See [`skills/weex-trader-skill/SKILL.md`](skills/weex-trader-skill/SKILL.md) and [`script-operations.md`](skills/weex-trader-skill/references/script-operations.md).

@@ -122,6 +122,26 @@ class WeexMessageTemplateTests(unittest.TestCase):
         self.assertEqual(result["reply_text"], "confirm")
         self.assertIn("real trading", result["reply_instruction"])
 
+    def test_unsupported_detected_language_renders_fixed_text_in_english(self) -> None:
+        decision = weex_language.resolve_language_decision("ja")
+        context = weex_language.language_context_from_decision(decision)
+        result = presenter.present_user_confirmation(
+            context,
+            environment={
+                "trading_mode": "live",
+                "market": "futures",
+                "uses_real_funds": True,
+            },
+            preview_context={"order_preview": {"symbol": "BTCUSDT", "type": "MARKET"}},
+        )
+        self.assertEqual(result["language"], "en")
+        self.assertEqual(result["language_source"], "fallback")
+        self.assertEqual(result["input_language"], "ja")
+        self.assertEqual(result["fallback_reason"], "unsupported_language")
+        self.assertEqual(result["reply_text"], "confirm")
+        self.assertIn("Current trading mode: real trading", result["reply_instruction"])
+        self.assertNotIn("真实盘", result["reply_instruction"])
+
     def test_user_message_contract_contains_language_template_and_text(self) -> None:
         message = presenter.present_user_message(
             "zh",

@@ -37,19 +37,61 @@ class TradeGuardRegressionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.environment_patch.stop()
 
-    def test_every_trade_guard_command_requires_explicit_language(self) -> None:
-        command_args = (
-            ["preview-order", "--market", "spot", "--order-json", "{}"],
-            ["preview-tp-sl", "--tp-sl-json", "{}"],
-            ["confirm-order"],
-            ["confirm-tp-sl"],
-            ["preview-cancel", "--market", "spot"],
-            ["confirm-cancel", "--intent-id", "id", "--risk-signature", "sig", "--user-reply", "confirm"],
+    def test_trade_guard_language_gate_maps_unsupported_input_to_english(self) -> None:
+        args = weex_trade_guard.build_parser().parse_args(
+            [
+                "preview-order",
+                "--market",
+                "spot",
+                "--order-json",
+                "{}",
+                "--input-language",
+                "ja",
+            ]
         )
-        for argv in command_args:
-            with self.subTest(argv=argv):
-                with self.assertRaises(SystemExit):
-                    weex_trade_guard.build_parser().parse_args(argv)
+        weex_trade_guard._resolve_cli_language(args)
+        self.assertEqual(args.language, "en")
+        self.assertEqual(args.language_decision.source, "fallback")
+        self.assertEqual(args.language_decision.fallback_reason, "unsupported_language")
+
+    def test_trade_guard_language_gate_rejects_conflicting_render_language(self) -> None:
+        args = weex_trade_guard.build_parser().parse_args(
+            [
+                "preview-order",
+                "--market",
+                "spot",
+                "--order-json",
+                "{}",
+                "--input-language",
+                "ja",
+                "--language",
+                "zh",
+            ]
+        )
+        with self.assertRaises(weex_trade_guard.AggregationInputError):
+            weex_trade_guard._resolve_cli_language(args)
+
+    def test_trade_guard_language_gate_requires_a_language_signal(self) -> None:
+        args = weex_trade_guard.build_parser().parse_args(
+            ["preview-order", "--market", "spot", "--order-json", "{}"]
+        )
+        with self.assertRaises(weex_trade_guard.AggregationInputError):
+            weex_trade_guard._resolve_cli_language(args)
+
+    def test_confirmation_rejects_language_change_after_preview(self) -> None:
+        intent = {"confirmation_language": "en"}
+        self.assertFalse(
+            weex_trade_guard._intent_language_matches(
+                intent,
+                argparse.Namespace(language="zh"),
+            )
+        )
+        self.assertTrue(
+            weex_trade_guard._intent_language_matches(
+                intent,
+                argparse.Namespace(language="en"),
+            )
+        )
 
     @staticmethod
     def _spot_preview_payload_from_raw(raw_order: dict[str, object]) -> dict[str, object]:

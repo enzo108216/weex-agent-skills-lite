@@ -63,9 +63,49 @@ class AgentStateEnvironmentOnlyTests(unittest.TestCase):
         self.assertEqual(context.language, "en")
         self.assertEqual(context.source, "fallback")
 
-    def test_preflight_requires_language_argument_without_persisting_it(self) -> None:
-        with self.assertRaises(SystemExit):
-            agent_state.main(["--command", "skill.preflight", "--pretty"])
+    def test_detected_unsupported_language_falls_back_to_english(self) -> None:
+        decision = weex_language.resolve_language_decision("ja")
+        self.assertEqual(decision.input_language, "ja")
+        self.assertEqual(decision.render_language, "en")
+        self.assertEqual(decision.source, "fallback")
+        self.assertEqual(decision.fallback_reason, "unsupported_language")
+
+        unknown = weex_language.resolve_language_decision(None)
+        self.assertIsNone(unknown.input_language)
+        self.assertEqual(unknown.render_language, "en")
+        self.assertEqual(unknown.source, "fallback")
+        self.assertEqual(unknown.fallback_reason, "language_undetermined")
+
+    def test_openclaw_japanese_order_request_never_selects_chinese_templates(self) -> None:
+        decision = weex_language.resolve_language_decision(
+            "ja",
+            confidence=0.99,
+        )
+        self.assertEqual(decision.render_language, "en")
+        self.assertNotEqual(decision.render_language, "zh")
+        self.assertEqual(decision.fallback_reason, "unsupported_language")
+
+    def test_low_confidence_language_detection_falls_back_to_english(self) -> None:
+        decision = weex_language.resolve_language_decision("zh", confidence=0.4)
+        self.assertEqual(decision.render_language, "en")
+        self.assertEqual(decision.source, "fallback")
+        self.assertEqual(decision.fallback_reason, "low_confidence")
+
+    def test_detected_language_cannot_be_rendered_as_a_different_supported_language(self) -> None:
+        with self.assertRaises(weex_language.LanguageMismatchError):
+            weex_language.resolve_language_decision("ja", render_language="zh")
+        with self.assertRaises(weex_language.LanguageMismatchError):
+            weex_language.resolve_language_decision("zh", render_language="en")
+        with self.assertRaises(weex_language.LanguageMismatchError):
+            weex_language.resolve_language_decision(None, render_language="zh")
+
+    def test_preflight_is_language_neutral_without_persisting_a_preference(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir, mock.patch.dict(
+            os.environ,
+            {"WEEX_TRADER_SKILL_HOME": tempdir},
+            clear=True,
+        ):
+            self.assertEqual(agent_state.main(["--command", "skill.preflight", "--pretty"]), 0)
 
     def test_runtime_reports_presence_without_exposing_values(self) -> None:
         credentials = {

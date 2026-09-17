@@ -70,7 +70,7 @@ def present_user_confirmation(
     preview_context: dict[str, Any] | None = None,
     include_auto_trade_authorization_hint: bool = False,
     market_price_recheck_skipped: bool = False,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     context = (
         language
         if isinstance(language, LanguageContext)
@@ -95,9 +95,14 @@ def present_user_confirmation(
         )
     result = {
         "language": resolved,
+        "language_source": context.source,
         "reply_text": prompt["reply_text"],
         "reply_instruction": instruction,
     }
+    if context.input_language is not None:
+        result["input_language"] = context.input_language
+    if context.fallback_reason is not None:
+        result["fallback_reason"] = context.fallback_reason
     return result
 
 

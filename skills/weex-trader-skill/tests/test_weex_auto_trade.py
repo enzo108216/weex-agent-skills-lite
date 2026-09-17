@@ -3157,6 +3157,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                     "idempotency_key": "facade-submit-1",
                     "operation_key": "spot.order.place_order",
                     "language": "zh",
+                    "input_language": "zh",
                     "orders": [
                         {
                             "symbol": "BTCUSDT",
@@ -3231,6 +3232,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                         "operation_key": "spot.order.place_order",
                         "orders": [order],
                         "language": "zh",
+                        "input_language": "zh",
                     },
                     confirm_live=True,
                 )
@@ -3257,7 +3259,7 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             self.assertEqual(fallback_event["severity"], "EXCEPTION")
             self.assertEqual(fallback_event["payload"]["error_code"], "SINGLE_LIMIT_EXCEEDED")
 
-    def test_submit_auto_manual_fallback_uses_requested_english_language(self) -> None:
+    def test_submit_auto_manual_fallback_maps_unsupported_input_language_to_english(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             state, cli_module, profile, strategy, authorization = self._authorized_fixture(
                 Path(tempdir)
@@ -3297,12 +3299,18 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
                         "idempotency_key": "facade-submit-fallback-en",
                         "operation_key": "spot.order.place_order",
                         "orders": [order],
-                        "language": "en",
+                        "input_language": "ja",
                     },
                     confirm_live=True,
                 )
 
             self.assertEqual(result["user_confirmation"]["language"], "en")
+            self.assertEqual(result["user_confirmation"]["language_source"], "fallback")
+            self.assertEqual(result["user_confirmation"]["input_language"], "ja")
+            self.assertEqual(result["user_confirmation"]["fallback_reason"], "unsupported_language")
+            self.assertEqual(result["language_source"], "fallback")
+            self.assertEqual(result["input_language"], "ja")
+            self.assertEqual(result["fallback_reason"], "unsupported_language")
             self.assertEqual(result["user_confirmation"]["reply_text"], "confirm")
             self.assertIn("was not submitted", result["user_confirmation"]["reply_instruction"])
             self.assertIn("After confirming, reply: confirm", result["user_confirmation"]["reply_instruction"])

@@ -7,15 +7,22 @@ name: weex-trader-skill
 
 This repository is the only source of truth. The skill is OpenClaw-only and keeps formal Trader trading/account behavior and complete automated-strategy authorization while omitting separate Analysis, Monitor, and Partner skills.
 
+Resolve the installed skill root from the directory containing this `SKILL.md`, `scripts/`, and
+`references/`. Run all commands from that root; do not assume the parent repository checkout is
+the executable skill root.
+
 Before every private query, order preview/confirmation, or automatic-order operation, run:
 
 ```bash
-python3 scripts/weex_agent_state.py --command skill.preflight --language en --pretty
+python3 scripts/weex_agent_state.py --command skill.preflight --pretty
 ```
 
-The host must pass the current user's language explicitly to every user-facing command with
-`--language zh` or `--language en`. If the host cannot determine the user's language, it must pass
-`--language en` for that invocation. Language is per invocation and is never persisted as a preference.
+Preflight is machine-only and is language-neutral. For user-facing commands, the host must pass the
+latest message's detected language with `--input-language` and may pass an explicit render language
+with `--language zh|en`. The resolver maps unsupported or undetermined input languages to English;
+it never maps them to Chinese. Detection confidence below `0.8` also falls back to English. A detected `zh` input must render `zh`, and a detected `en` input
+must render `en`; conflicting values fail closed. Language decisions are invocation-scoped and are
+never read from memory, previous assistant messages, or persisted preferences.
 
 Stop if runtime requirements are not ready, modules are missing, environment validation fails, or `runtime.credentials.complete` is false.
 
@@ -47,7 +54,7 @@ Use only operations in `references/contract-api-definitions.json` and `reference
 
 Private account queries operate on the real environment only. Every private summary starts with the returned `user_environment_prefix` and includes the real-funds warning.
 
-1. Parse intent and ask only for missing/ambiguous fields; never guess quantity unit, symbol, side, or mode.
+1. Detect language from the latest user message, resolve the render language, then parse intent and ask only for missing/ambiguous fields; never guess quantity unit, symbol, side, or mode.
 2. Call the appropriate preview command; never call a direct mutating API command from conversation.
 3. Return `user_confirmation.reply_instruction` verbatim.
 4. Submit only after a later independent message exactly matches `user_confirmation.reply_text`, using the current intent ID/risk signature internally. Order fields, environment account, mode, TTL, confirmation text, and required flags remain bound.
@@ -66,7 +73,7 @@ Automatic authorization is environment-account-bound and real-trading-only. It n
 - Full-position TP/SL and unproven reduce-only paths remain manual. Hard constraints, state conflicts, expired/revoked authorization, unsupported operations, or incomplete facts block every write.
 - Reconciliation never changes accepted conservative quota. Snapshots/restores remain owner-only local controls; restore revokes active authorizations, preserves unresolved usage, and never acts on exchange orders.
 - Existing saved-profile authorizations are not migrated. After upgrading, register and explicitly authorize the current environment account.
-- `submit-auto` requires a `language` field (or CLI `--language zh|en`) for manual fallback and notification text. The selected confirmation word is persisted with the intent and must match exactly.
+- `submit-auto` accepts `input_language` plus an optional `language` render override for manual fallback and notification text. Unsupported/unknown input languages resolve to English. The selected confirmation word is persisted with the intent and must match exactly.
 - Review the complete template coverage in `references/message-templates.md`; add `zh` and `en` together for every new user-facing template.
 
 Local state controls misuse/corruption; they are not identity authentication or tamper-proofing against an attacker controlling the same OS user, Agent, process environment, or API key.

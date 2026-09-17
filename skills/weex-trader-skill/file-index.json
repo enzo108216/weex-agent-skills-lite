@@ -33,6 +33,7 @@
     "references/script-operations.md": {"role": "CLI and automated-authorization operations."},
     "references/trade-data-schema.md": {"role": "Internal fact schema."},
     "references/message-templates.md": {"role": "Review catalog for zh/en user-facing message coverage."},
+    "references/openclaw-language-contract.md": {"role": "OpenClaw input-to-render language decision and confirmation contract."},
     "references/troubleshooting.md": {"role": "Operator-visible failures and recovery."},
     "references/updates.md": {"role": "Maintainer packaging and release guidance."},
     "references/websocket.md": {"role": "Official market-stream reference; no local monitor task."}

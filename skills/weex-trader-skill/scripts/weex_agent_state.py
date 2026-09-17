@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from weex_language import resolve_language
 from weex_url_policy import BaseUrlPolicyError, validate_weex_base_url
 
 
@@ -401,12 +400,6 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--language",
-        required=True,
-        choices=("zh", "en"),
-        help="Explicit language for this invocation; it is never persisted as a preference",
-    )
-    parser.add_argument(
         "--command",
         default="agent-state.refresh",
         help="Command label to store in agent-runtime.json",
@@ -417,7 +410,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    resolve_language(args.language)
     payload = refresh_agent_records(command=args.command)
     _output_json(payload, args.pretty)
     return 0

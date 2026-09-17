@@ -20,7 +20,7 @@ from weex_auto_trade_state import (
     build_verified_usage_evidence,
 )
 from weex_agent_state import RuntimePreflightError, ensure_private_runtime_ready
-from weex_language import resolve_language
+from weex_language import resolve_language, resolve_language_decision
 from weex_user_presenter import present_manual_fallback
 from weex_trade_guard import (
     _validate_official_order_semantics,
@@ -84,7 +84,7 @@ COMMAND_SCHEMAS: dict[str, tuple[set[str], set[str]]] = {
             "orders",
             "language",
         },
-        set(),
+        {"input_language"},
     ),
     "resolve-auto-usage": (
         {"strategy_id", "usage_id"},
@@ -152,6 +152,19 @@ class AutoTradeFacade:
         *,
         confirm_live: bool = False,
     ) -> dict[str, Any]:
+        language_decision = None
+        if command == "submit-auto":
+            payload = dict(payload)
+            input_language = payload.pop("input_language", None)
+            try:
+                decision = resolve_language_decision(
+                    input_language,
+                    render_language=payload.get("language"),
+                )
+            except ValueError as exc:
+                raise FacadeError("INVALID_REQUEST", str(exc), "FIX_LANGUAGE") from exc
+            payload["language"] = decision.render_language
+            language_decision = decision
         _reject_raw_credentials(payload)
         handler = {
             "register-strategy": self._register_strategy,
@@ -180,6 +193,20 @@ class AutoTradeFacade:
                 operation_lock = candidate
         with operation_lock:
             result = handler(payload, confirm_live=confirm_live)
+            if command == "submit-auto" and isinstance(result, dict) and language_decision is not None:
+                result.setdefault("language", language_decision.render_language)
+                result.setdefault("language_source", language_decision.source)
+                if language_decision.input_language is not None:
+                    result.setdefault("input_language", language_decision.input_language)
+                if language_decision.fallback_reason is not None:
+                    result.setdefault("fallback_reason", language_decision.fallback_reason)
+                confirmation = result.get("user_confirmation")
+                if isinstance(confirmation, dict):
+                    confirmation.setdefault("language_source", language_decision.source)
+                    if language_decision.input_language is not None:
+                        confirmation.setdefault("input_language", language_decision.input_language)
+                    if language_decision.fallback_reason is not None:
+                        confirmation.setdefault("fallback_reason", language_decision.fallback_reason)
             self._schedule_accepted_summary_worker(
                 command,
                 payload,
@@ -1194,7 +1221,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--language",
         choices=("zh", "en"),
         default=None,
-        help="Required for submit-auto user-facing fallback and notifications.",
+        help="Render language for submit-auto fallback and notifications; defaults to the language decision.",
+    )
+    parser.add_argument(
+        "--input-language",
+        default=None,
+        help="Detected user language (BCP-47 or unknown); unsupported values fall back to English.",
     )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     return parser
@@ -1212,8 +1244,23 @@ def main(argv: list[str] | None = None) -> int:
                     "FIX_REQUEST",
                 )
             payload["language"] = args.language
-        if args.command == "submit-auto" and args.language is None:
-            raise FacadeError("INVALID_REQUEST", "--language is required for submit-auto", "FIX_REQUEST")
+        if args.input_language is not None:
+            if args.command != "submit-auto":
+                raise FacadeError(
+                    "INVALID_REQUEST",
+                    "--input-language is supported only for submit-auto",
+                    "FIX_REQUEST",
+                )
+            payload["input_language"] = args.input_language
+        if args.command == "submit-auto":
+            try:
+                decision = resolve_language_decision(
+                    payload.get("input_language"),
+                    render_language=payload.get("language"),
+                )
+            except ValueError as exc:
+                raise FacadeError("INVALID_REQUEST", str(exc), "FIX_LANGUAGE") from exc
+            payload["language"] = decision.render_language
         _reject_raw_credentials(payload)
         _validate_command_payload(args.command, payload)
         try:

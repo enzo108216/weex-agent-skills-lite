@@ -1,14 +1,16 @@
 # Script Operations
 
-Run commands from the skill root. Before private work:
+Run commands from the installed skill root (the directory containing `SKILL.md`, `scripts/`, and
+`references/`), not its parent repository checkout. Before private work:
 
 ```bash
-python3 scripts/weex_agent_state.py --command skill.preflight --language en --pretty
+python3 scripts/weex_agent_state.py --command skill.preflight --pretty
 ```
 
-Pass the current user's language explicitly to every user-facing command with `--language zh` or
-`--language en`. If the host cannot determine the user's language, pass `--language en` for that
-invocation. Language is per invocation and is never persisted as a preference.
+Preflight is language-neutral. For user-facing commands, pass `--input-language` from the latest
+user message. Use `--language zh|en` only to explicitly select a matching render language; an
+unsupported or unknown input language falls back to English and cannot be overridden to Chinese.
+Language is per invocation and is never persisted as a preference.
 
 Continue only when runtime requirements and `runtime.env_validation.ok` are valid and `runtime.credentials.complete` is true. Configure `WEEX_API_KEY`, `WEEX_API_SECRET`, and `WEEX_API_PASSPHRASE` together outside argv/chat.
 
@@ -26,11 +28,11 @@ Private queries are live-only and always use the real environment. Every private
 ## Guarded orders
 
 ```bash
-python3 scripts/weex_trade_guard.py preview-order --market futures --trading-mode live --order-json '{...}' --language en --pretty
-python3 scripts/weex_trade_guard.py confirm-order --intent-id <id> --risk-signature <signature> --trading-mode live --user-reply '<exact-confirmation-text>' --confirm-live --language en --pretty
+python3 scripts/weex_trade_guard.py preview-order --market futures --trading-mode live --order-json '{...}' --input-language ja --pretty
+python3 scripts/weex_trade_guard.py confirm-order --intent-id <id> --risk-signature <signature> --trading-mode live --user-reply '<exact-confirmation-text>' --confirm-live --input-language ja --pretty
 
-python3 scripts/weex_trade_guard.py preview-cancel --market futures --order-id <id> --language en --pretty
-python3 scripts/weex_trade_guard.py confirm-cancel --intent-id <id> --risk-signature <signature> --user-reply '<exact-confirmation-text>' --confirm-live --language en --pretty
+python3 scripts/weex_trade_guard.py preview-cancel --market futures --order-id <id> --input-language en --pretty
+python3 scripts/weex_trade_guard.py confirm-cancel --intent-id <id> --risk-signature <signature> --user-reply '<exact-confirmation-text>' --confirm-live --input-language en --pretty
 ```
 
 Use `preview-tp-sl`/`confirm-tp-sl` for official Futures TP/SL. The latest intent binds order fields, environment account, mode, TTL, and confirmation text. A plain market order may skip a second price comparison after exact confirmation; other safety bindings and uncertain-submission handling remain.
@@ -60,7 +62,11 @@ python3 scripts/weex_auto_trade.py enable-auto-trading-after-restore --input @em
 
 Authorization requests require modules, symbol scope, conservative per-leg maximum, cumulative quota, and explicit `valid_hours` up to 720 hours. Granting changes local state but does not submit an order. Automatic writes still require fresh official facts, scope/quota checks, atomic reservations, durable audit, and `--confirm-live`. Uncertain results are never retried.
 
-`submit-auto` requires `language` in the JSON request and the CLI requires `--language zh|en`. It controls manual-fallback confirmation text and the language carried to the delayed local notification worker. The exact selected confirmation word remains bound to the pending intent.
+`submit-auto` accepts `input_language` in JSON or `--input-language` on the CLI. An optional `language`/`--language zh|en` must agree with a supported detected input; unsupported and unknown inputs resolve to English. The exact selected confirmation word remains bound to the pending intent.
+
+For example, a Japanese request should send `"input_language": "ja"` (or
+`--input-language ja`) and must not force `language`/`--language zh`; the resulting fixed
+confirmation text is English.
 
 The full user-facing template inventory and zh/en coverage matrix is in [`message-templates.md`](message-templates.md).
 

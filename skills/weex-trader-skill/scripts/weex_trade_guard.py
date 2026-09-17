@@ -27,7 +27,14 @@ from weex_order_intent_state import (
     load_intent,
     save_intent,
 )
-from weex_language import resolve_language
+from weex_language import (
+    LanguageContext,
+    LanguageMismatchError,
+    LanguageRequiredError,
+    language_context_from_decision,
+    resolve_language,
+    resolve_language_decision,
+)
 from weex_message_templates import CONFIRMATION_PROMPTS
 from weex_trade_data_aggregator import AggregationInputError, TradeDataAggregator
 from weex_user_presenter import (
@@ -1537,6 +1544,24 @@ def _arg_value(args: argparse.Namespace, name: str, default: Any = None) -> Any:
     return vars(args).get(name, default)
 
 
+def _resolve_cli_language(args: argparse.Namespace) -> None:
+    """Resolve host-detected input language before any user-facing command runs."""
+    requested = _arg_value(args, "language", None)
+    detected = _arg_value(args, "input_language", None)
+    if requested is None and detected is None:
+        raise AggregationInputError("--language or --input-language is required")
+    try:
+        decision = resolve_language_decision(
+            detected,
+            render_language=requested,
+        )
+    except (LanguageMismatchError, LanguageRequiredError, ValueError) as exc:
+        raise AggregationInputError(str(exc)) from exc
+    args.language = decision.render_language
+    args.language_decision = decision
+    args.language_context = language_context_from_decision(decision)
+
+
 def _environment_for_mode(trading_mode: str, market: str) -> dict[str, Any]:
     mode = _normalize_trading_mode(trading_mode)
     normalized_market = str(market or "").strip().lower()
@@ -1615,14 +1640,14 @@ def _localized_environment(environment: dict[str, Any], language: str) -> dict[s
 
 
 def _build_user_confirmation(
-    language: str,
+    language: str | LanguageContext,
     *,
     environment: dict[str, Any] | None = None,
     preview_context: dict[str, Any] | None = None,
     include_mode_switch: bool = False,
     include_auto_trade_authorization_hint: bool = False,
     market_price_recheck_skipped: bool = False,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return present_user_confirmation(
         language,
         environment=environment,
@@ -2204,7 +2229,7 @@ def cmd_preview_order(args: argparse.Namespace, *, now_ms: int | None = None) ->
     confirmation_context = dict(response)
     confirmation_context.setdefault("order_preview", risk_payload.get("order_preview", {}))
     response["user_confirmation"] = _build_user_confirmation(
-        _arg_value(args, "language", None),
+        getattr(args, "language_context", _arg_value(args, "language", None)),
         environment=environment,
         preview_context=confirmation_context,
         include_auto_trade_authorization_hint=True,
@@ -2284,7 +2309,7 @@ def cmd_preview_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
     response["expires_at"] = intent["expires_at"]
     response["risk_signature"] = intent["risk_signature"]
     response["user_confirmation"] = _build_user_confirmation(
-        _arg_value(args, "language", None),
+        getattr(args, "language_context", _arg_value(args, "language", None)),
         environment=environment,
         preview_context=tp_sl_preview_context,
     )
@@ -2295,6 +2320,15 @@ def cmd_preview_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
 def _confirm_flags_match_mode(args: argparse.Namespace, trading_mode: str) -> bool:
     confirm_live = bool(_arg_value(args, "confirm_live", False))
     return confirm_live and trading_mode == "live"
+
+
+def _intent_language_matches(intent: dict[str, Any], args: argparse.Namespace) -> bool:
+    try:
+        expected = resolve_language(intent.get("confirmation_language"))
+        actual = resolve_language(_arg_value(args, "language", None))
+    except (LanguageRequiredError, TypeError, ValueError):
+        return False
+    return hmac.compare_digest(expected, actual)
 
 
 def _mark_intent_review_required(intent: dict[str, Any], error: str) -> None:
@@ -2514,6 +2548,16 @@ def cmd_confirm_order(args: argparse.Namespace, *, now_ms: int | None = None) ->
     if intent.get("intent_type", "order") != "order":
         _output_json({"ok": False, "error": _localized_guard_error(args.language, "pending_order_wrong_type")}, args.pretty)
         return 1
+    if not _intent_language_matches(intent, args):
+        _output_json(
+            {
+                "ok": False,
+                "error": _localized_guard_error(args.language, "intent_language_mismatch"),
+                "next_action": "GENERATE_NEW_PREVIEW",
+            },
+            args.pretty,
+        )
+        return 1
     if args.intent_id and args.intent_id != intent.get("intent_id"):
         _output_json({"ok": False, "error": _localized_guard_error(args.language, "intent_id_mismatch_order")}, args.pretty)
         return 1
@@ -2666,6 +2710,16 @@ def cmd_confirm_tp_sl(args: argparse.Namespace, *, now_ms: int | None = None) ->
         return 1
     if intent.get("intent_type") != "tp_sl_order":
         _output_json({"ok": False, "error": _localized_guard_error(args.language, "pending_tp_sl_wrong_type")}, args.pretty)
+        return 1
+    if not _intent_language_matches(intent, args):
+        _output_json(
+            {
+                "ok": False,
+                "error": _localized_guard_error(args.language, "intent_language_mismatch"),
+                "next_action": "GENERATE_NEW_PREVIEW",
+            },
+            args.pretty,
+        )
         return 1
     if args.intent_id and args.intent_id != intent.get("intent_id"):
         _output_json({"ok": False, "error": _localized_guard_error(args.language, "intent_id_mismatch_tp_sl")}, args.pretty)
@@ -2850,7 +2904,7 @@ def cmd_preview_cancel(args: argparse.Namespace, *, now_ms: int | None = None) -
         "risk_signature": intent["risk_signature"],
     })
     response["user_confirmation"] = _build_user_confirmation(
-        confirmation_language,
+        getattr(args, "language_context", confirmation_language),
         environment=environment,
         preview_context={"order_preview": {**preview, "order_type": "CANCEL"}, "alerts": []},
     )
@@ -2862,6 +2916,16 @@ def cmd_confirm_cancel(args: argparse.Namespace, *, now_ms: int | None = None) -
     intent = load_intent()
     if not isinstance(intent, dict) or intent.get("intent_type") != "cancel_order":
         _output_json({"ok": False, "error": _localized_guard_error(args.language, "pending_cancel_missing")}, args.pretty)
+        return 1
+    if not _intent_language_matches(intent, args):
+        _output_json(
+            {
+                "ok": False,
+                "error": _localized_guard_error(args.language, "intent_language_mismatch"),
+                "next_action": "GENERATE_NEW_PREVIEW",
+            },
+            args.pretty,
+        )
         return 1
     if intent.get("submission_status") in {"REVIEW_REQUIRED", "SUBMITTED"}:
         _output_json({"ok": False, "status": "REVIEW_REQUIRED", "error": _machine_error("PENDING_CANCEL_REVIEW_REQUIRED", intent.get("submission_error")), "next_action": "INSPECT_AND_RECONCILE_MANUALLY"}, args.pretty)
@@ -2966,7 +3030,8 @@ def build_parser() -> argparse.ArgumentParser:
     preview.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
     preview.add_argument("--order-json", required=True, help="JSON order payload.")
     preview.add_argument("--ttl-seconds", type=int, default=300, help="Intent TTL in seconds.")
-    preview.add_argument("--language", choices=("zh", "en"), required=True, help="Language for human confirmation prompt.")
+    preview.add_argument("--language", choices=("zh", "en"), default=None, help="Render language for human confirmation prompt.")
+    preview.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
     preview.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     preview_tp_sl = subparsers.add_parser(
@@ -2977,7 +3042,8 @@ def build_parser() -> argparse.ArgumentParser:
     preview_tp_sl.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE, help="TP/SL trading mode; live only.")
     preview_tp_sl.add_argument("--tp-sl-json", required=True, help="JSON TP/SL conditional order payload.")
     preview_tp_sl.add_argument("--ttl-seconds", type=int, default=300, help="Intent TTL in seconds.")
-    preview_tp_sl.add_argument("--language", choices=("zh", "en"), required=True, help="Language for human confirmation prompt.")
+    preview_tp_sl.add_argument("--language", choices=("zh", "en"), default=None, help="Render language for human confirmation prompt.")
+    preview_tp_sl.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
     preview_tp_sl.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     confirm = subparsers.add_parser("confirm-order", help="Submit the last previewed order.")
@@ -2986,7 +3052,8 @@ def build_parser() -> argparse.ArgumentParser:
     confirm.add_argument("--user-reply", default=None, help="Exact independent user confirmation text from the latest preview.")
     confirm.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
     confirm.add_argument("--confirm-live", action="store_true", help="Required before sending a real order.")
-    confirm.add_argument("--language", choices=("zh", "en"), required=True, help="Language for user-facing environment prefix.")
+    confirm.add_argument("--language", choices=("zh", "en"), default=None, help="Render language for user-facing environment prefix.")
+    confirm.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
     confirm.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     confirm_tp_sl = subparsers.add_parser(
@@ -2999,7 +3066,8 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_tp_sl.add_argument("--user-reply", default=None, help="Exact independent user confirmation text from the latest preview.")
     confirm_tp_sl.add_argument("--trading-mode", choices=TRADING_MODES, default=DEFAULT_TRADING_MODE)
     confirm_tp_sl.add_argument("--confirm-live", action="store_true", help="Required before sending a real TP/SL order.")
-    confirm_tp_sl.add_argument("--language", choices=("zh", "en"), required=True, help="Language for user-facing environment prefix.")
+    confirm_tp_sl.add_argument("--language", choices=("zh", "en"), default=None, help="Render language for user-facing environment prefix.")
+    confirm_tp_sl.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
     confirm_tp_sl.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 
     preview_cancel = subparsers.add_parser("preview-cancel", help="Preview an order cancellation.")
@@ -3009,7 +3077,8 @@ def build_parser() -> argparse.ArgumentParser:
     preview_cancel.add_argument("--order-id", default=None)
     preview_cancel.add_argument("--client-oid", default=None)
     preview_cancel.add_argument("--ttl-seconds", type=int, default=300)
-    preview_cancel.add_argument("--language", choices=("zh", "en"), required=True)
+    preview_cancel.add_argument("--language", choices=("zh", "en"), default=None)
+    preview_cancel.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
     preview_cancel.add_argument("--pretty", action="store_true")
 
     confirm_cancel = subparsers.add_parser("confirm-cancel", help="Submit the latest cancellation preview.")
@@ -3017,7 +3086,8 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_cancel.add_argument("--risk-signature", required=True)
     confirm_cancel.add_argument("--user-reply", required=True)
     confirm_cancel.add_argument("--confirm-live", action="store_true", help="Required before sending a real cancellation.")
-    confirm_cancel.add_argument("--language", choices=("zh", "en"), required=True)
+    confirm_cancel.add_argument("--language", choices=("zh", "en"), default=None)
+    confirm_cancel.add_argument("--input-language", default=None, help="Detected user language; unsupported values fall back to English.")
     confirm_cancel.add_argument("--pretty", action="store_true")
 
     return parser
@@ -3026,6 +3096,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        _resolve_cli_language(args)
         if args.command == "preview-order":
             return cmd_preview_order(args)
         if args.command == "preview-tp-sl":

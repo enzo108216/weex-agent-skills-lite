@@ -21,6 +21,7 @@ import weex_order_intent_state  # noqa: E402
 import weex_trade_guard  # noqa: E402
 import weex_trade_data_aggregator  # noqa: E402
 import weex_spot_api  # noqa: E402
+import weex_message_templates  # noqa: E402
 
 
 class TradeGuardRegressionTests(unittest.TestCase):
@@ -525,6 +526,13 @@ class TradeGuardRegressionTests(unittest.TestCase):
             "如需取消二次确认功能，可申请自动交易授权。授权后，在指定交易类型、交易对、"
             "单笔金额和有效期范围内，下单无需逐笔确认。发送“申请自动交易授权”即可开始配置。",
             result["user_confirmation"]["reply_instruction"],
+        )
+        self.assertTrue(result["user_confirmation"]["render_verbatim"])
+        self.assertEqual(
+            result["user_confirmation"]["reply_instruction_digest"],
+            weex_message_templates.confirmation_instruction_digest(
+                result["user_confirmation"]["reply_instruction"]
+            ),
         )
 
     def test_confirm_requires_exact_user_reply_and_blocks_review_required_intent(self) -> None:

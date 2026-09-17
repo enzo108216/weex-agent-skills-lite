@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from string import Formatter
@@ -61,6 +62,11 @@ AUTO_TRADE_AUTHORIZATION_HINTS = {
 }
 
 
+def confirmation_instruction_digest(instruction: str) -> str:
+    """Return the stable UTF-8 digest used by hosts to verify verbatim output."""
+    return hashlib.sha256(instruction.encode("utf-8")).hexdigest()
+
+
 def _resolved_language(language: str) -> str:
     return resolve_language(language)
 
@@ -78,7 +84,7 @@ def build_manual_fallback_confirmation(
     language: str,
     *,
     authorization_miss: bool,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     resolved = _resolved_language(language)
     notice_id = (
         "manual_fallback.authorization_miss_notice"
@@ -101,6 +107,8 @@ def build_manual_fallback_confirmation(
         "reply_text": render_message(resolved, "confirmation.reply_text"),
         "reply_instruction": "\n".join(lines),
         "authorization_hint": authorization_hint,
+        "render_verbatim": True,
+        "reply_instruction_digest": confirmation_instruction_digest("\n".join(lines)),
     }
 
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import sys
+import hashlib
 import json
+import sys
 import unittest
 from string import Formatter
 from pathlib import Path
@@ -61,6 +62,11 @@ class WeexMessageTemplateTests(unittest.TestCase):
         self.assertIn("was not submitted", english["reply_instruction"])
         self.assertIn("After confirming, reply: confirm", english["reply_instruction"])
         self.assertIn("Request automated trading authorization", english["authorization_hint"])
+        self.assertTrue(chinese["render_verbatim"])
+        self.assertEqual(
+            chinese["reply_instruction_digest"],
+            hashlib.sha256(chinese["reply_instruction"].encode("utf-8")).hexdigest(),
+        )
 
     def test_manual_fallback_without_authorization_hint_is_localized(self) -> None:
         chinese = templates.build_manual_fallback_confirmation("zh", authorization_miss=False)
@@ -125,6 +131,55 @@ class WeexMessageTemplateTests(unittest.TestCase):
         self.assertEqual(result["language"], "en-US")
         self.assertEqual(result["reply_text"], "confirm")
         self.assertIn("real trading", result["reply_instruction"])
+
+    def test_user_presenter_keeps_authorization_hint_without_environment_context(self) -> None:
+        result = presenter.present_user_confirmation(
+            "en-US",
+            include_auto_trade_authorization_hint=True,
+        )
+        self.assertIn("automated trading authorization", result["reply_instruction"])
+
+    def test_confirmation_contract_marks_complete_instruction_as_verbatim(self) -> None:
+        result = presenter.present_user_confirmation(
+            "en-US",
+            environment={
+                "trading_mode": "live",
+                "market": "futures",
+                "uses_real_funds": True,
+            },
+            preview_context={"order_preview": {"symbol": "BTCUSDT", "type": "MARKET"}},
+            include_auto_trade_authorization_hint=True,
+        )
+        self.assertTrue(result["render_verbatim"])
+        self.assertEqual(
+            result["reply_instruction_digest"],
+            hashlib.sha256(result["reply_instruction"].encode("utf-8")).hexdigest(),
+        )
+        self.assertTrue(
+            result["reply_instruction"].endswith(
+                templates.AUTO_TRADE_AUTHORIZATION_HINTS["en-US"]
+            )
+        )
+
+    def test_confirmation_contract_is_complete_for_every_supported_locale(self) -> None:
+        for locale in weex_language.SUPPORTED_LANGUAGES:
+            with self.subTest(locale=locale):
+                result = presenter.present_user_confirmation(
+                    locale,
+                    environment={"trading_mode": "live", "market": "futures"},
+                    preview_context={"order_preview": {"symbol": "BTCUSDT", "type": "MARKET"}},
+                    include_auto_trade_authorization_hint=True,
+                )
+                self.assertTrue(result["render_verbatim"])
+                self.assertEqual(
+                    result["reply_instruction_digest"],
+                    hashlib.sha256(result["reply_instruction"].encode("utf-8")).hexdigest(),
+                )
+                self.assertTrue(
+                    result["reply_instruction"].endswith(
+                        templates.AUTO_TRADE_AUTHORIZATION_HINTS[locale]
+                    )
+                )
 
     def test_supported_detected_language_renders_native_fixed_text(self) -> None:
         decision = weex_language.resolve_language_decision("ja")

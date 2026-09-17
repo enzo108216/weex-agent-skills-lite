@@ -12,6 +12,7 @@ from weex_message_templates import (
     build_confirmation_instruction,
     build_manual_fallback_confirmation,
     build_notification_text,
+    confirmation_instruction_digest,
     environment_label,
     environment_notice,
     environment_prefix,
@@ -93,11 +94,15 @@ def present_user_confirmation(
             reply_text=prompt["reply_text"],
             market_price_recheck_skipped=market_price_recheck_skipped,
         )
+    elif hint is not None:
+        instruction = "\n\n".join((instruction, hint))
     result = {
         "language": resolved,
         "language_source": context.source,
         "reply_text": prompt["reply_text"],
         "reply_instruction": instruction,
+        "render_verbatim": True,
+        "reply_instruction_digest": confirmation_instruction_digest(instruction),
     }
     if context.input_language is not None:
         result["input_language"] = context.input_language

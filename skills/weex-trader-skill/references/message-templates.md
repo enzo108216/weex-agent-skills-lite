@@ -35,3 +35,10 @@
 - 所有 locale 必须使用相同的占位符集合。
 - 机器错误码、`next_action`、内部风控诊断和 WEEX 原始错误不放入此目录。
 - 内部字段只有在进入用户回复或通知正文前，才转换为模板 ID。
+
+## 确认文案展示契约
+
+- `user_confirmation.reply_instruction` 是唯一完整的确认展示文本；宿主必须把它当作不透明字符串原样输出。
+- `render_verbatim` 为 `true` 时，禁止宿主删减、翻译、追加、重排或自行拼接确认段落。
+- `reply_instruction_digest` 是完整 UTF-8 文本的 SHA-256 摘要，可用于宿主展示前后的完整性校验。
+- `reply_text` 只表示后续独立确认消息必须精确匹配的确认词，不得替代 `reply_instruction` 作为预览文案。

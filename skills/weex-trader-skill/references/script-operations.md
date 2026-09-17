@@ -37,6 +37,11 @@ python3 scripts/weex_trade_guard.py confirm-cancel --intent-id <id> --risk-signa
 
 Use `preview-tp-sl`/`confirm-tp-sl` for official Futures TP/SL. The latest intent binds order fields, environment account, mode, TTL, and confirmation text. A plain market order may skip a second price comparison after exact confirmation; other safety bindings and uncertain-submission handling remain.
 
+For every preview or manual fallback, render `user_confirmation.reply_instruction` exactly as returned.
+Treat it as opaque text; do not rebuild it from `reply_text`, `order_preview`, or individual template
+fragments. If the host supports integrity checks, verify `render_verbatim=true` and compare
+`reply_instruction_digest` before displaying the text.
+
 All writes require `--confirm-live`. Demo flags and simulated endpoints are unsupported.
 
 ## Automated-strategy authorization

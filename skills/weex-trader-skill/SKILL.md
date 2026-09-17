@@ -56,7 +56,11 @@ Private account queries operate on the real environment only. Every private summ
 
 1. Detect language from the latest user message, resolve the render language, then parse intent and ask only for missing/ambiguous fields; never guess quantity unit, symbol, side, or mode.
 2. Call the appropriate preview command; never call a direct mutating API command from conversation.
-3. Return `user_confirmation.reply_instruction` verbatim.
+3. Return `user_confirmation.reply_instruction` verbatim as an opaque UTF-8 string. Do not
+   summarize, translate, prepend labels, remove paragraphs, reflow line breaks, or compose a
+   replacement confirmation message. When present, `render_verbatim` is the host rendering
+   contract and `reply_instruction_digest` can be used to verify that the displayed text was not
+   changed.
 4. Submit only after a later independent message exactly matches `user_confirmation.reply_text`, using the current intent ID/risk signature internally. Order fields, environment account, mode, TTL, confirmation text, and required flags remain bound.
 5. Use `--confirm-live` for every mutating request. Demo modes, Demo flags and simulated endpoints are removed and fail closed before any request. A timeout or uncertain response is `REVIEW_REQUIRED`; never retry, split, or guess.
 

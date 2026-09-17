@@ -3250,6 +3250,13 @@ class AutoTradeFacadeProductionBoundaryTests(unittest.TestCase):
             self.assertEqual(result["user_confirmation"]["reply_text"], "确认")
             self.assertIn("本次订单超过自动交易授权范围，尚未下单", result["user_confirmation"]["reply_instruction"])
             self.assertIn("确认后回复：确认", result["user_confirmation"]["reply_instruction"])
+            self.assertTrue(result["user_confirmation"]["render_verbatim"])
+            self.assertEqual(
+                result["user_confirmation"]["reply_instruction_digest"],
+                hashlib.sha256(
+                    result["user_confirmation"]["reply_instruction"].encode("utf-8")
+                ).hexdigest(),
+            )
             self.assertIn("申请自动交易授权", result["authorization_hint"])
             fallback_event = next(
                 event

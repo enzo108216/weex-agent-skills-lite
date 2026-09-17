@@ -656,6 +656,8 @@ class AutoTradeFacade:
                         "language": confirmation["language"],
                         "reply_text": confirmation["reply_text"],
                         "reply_instruction": confirmation["reply_instruction"],
+                        "render_verbatim": confirmation["render_verbatim"],
+                        "reply_instruction_digest": confirmation["reply_instruction_digest"],
                     },
                     "next_action": "CONFIRM_ORDER_MANUALLY",
                 }

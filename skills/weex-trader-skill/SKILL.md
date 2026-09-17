@@ -42,7 +42,7 @@ The runtime derives an opaque account binding from the credentials and selected 
 - `scripts/weex_order_intent_state.py`: preview identity, TTL, environment-account and risk-signature binding.
 - `scripts/weex_auto_trade.py`: stable JSON facade for strategy registration, authorization, guarded submission, reconciliation, events, snapshots, and restore.
 - `scripts/weex_auto_trade_state.py`, `weex_auto_trade_amount.py`, `weex_auto_trade_runtime.py`, `weex_auto_trade_notify.py`: authorization state, conservative valuation, official facts, notification, and recovery implementation.
-- `scripts/weex_message_templates.py`: shared zh/en user-facing templates for confirmations, automatic-trading fallback, and notifications.
+- `scripts/weex_message_templates.py`: locale-file-backed user-facing templates for confirmations, automatic-trading fallback, and notifications.
 - `scripts/weex_user_presenter.py`: user-facing presentation boundary; domain modules do not compose localized reply text directly.
 - `scripts/weex_trade_data_aggregator.py`: internal official account/market facts for guards; not a conversational analysis/replay surface.
 - `scripts/weex_agent_state.py`: non-secret preflight and environment readiness summary.
@@ -78,7 +78,7 @@ Automatic authorization is environment-account-bound and real-trading-only. It n
 - Reconciliation never changes accepted conservative quota. Snapshots/restores remain owner-only local controls; restore revokes active authorizations, preserves unresolved usage, and never acts on exchange orders.
 - Existing saved-profile authorizations are not migrated. After upgrading, register and explicitly authorize the current environment account.
 - `submit-auto` accepts `input_language` plus an optional `language` render override for manual fallback and notification text. Unknown input resolves to `en-US`. The selected confirmation locale and word are persisted with the intent and must match exactly.
-- Review the complete template coverage in `references/message-templates.md`; add `zh` and `en` together for every new user-facing template.
+- Review the complete locale template coverage in `references/message-templates.md`; add every new user-facing template to all locale files.
 
 Local state controls misuse/corruption; they are not identity authentication or tamper-proofing against an attacker controlling the same OS user, Agent, process environment, or API key.
 

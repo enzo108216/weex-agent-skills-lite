@@ -23,8 +23,8 @@ not language evidence.
 
 ## Resolution rules
 
-1. `zh`, `zh-CN`, and other Chinese variants render with `zh`.
-2. `en`, `en-US`, and other English variants render with `en`.
+1. `zh`, `zh-CN`, and other Chinese variants render with `zh-CN` unless a specific supported Chinese locale is detected.
+2. `en`, `en-US`, and other English variants render with `en-US` unless a specific supported English locale is detected.
 3. Supported locales such as Japanese, Korean, French, and Portuguese render their own locale files.
 4. An unknown or undetermined language renders fixed templates with `en-US`.
 5. Low-confidence detection renders fixed templates with `en-US`.

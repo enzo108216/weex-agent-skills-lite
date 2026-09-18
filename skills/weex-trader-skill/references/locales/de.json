@@ -4,7 +4,7 @@
   "templates": {
     "confirmation.reply_text": "bestätigen",
     "confirmation.reply_instruction": "Zum Fortfahren antworten Sie bitte mit: bestätigen",
-    "authorization.hint": "Sie können eine Autorisierung für den automatisierten Handel anfordern, um die Bestätigung pro Order zu deaktivieren. Nach der Autorisierung können Orders im festgelegten Umfang ohne erneute Bestätigung gesendet werden.",
+    "authorization.hint": "Sie können eine Autorisierung für den automatisierten Handel anfordern, um die Bestätigung pro Order zu deaktivieren. Die Autorisierung gilt nur für die festgelegte Handelsart, die festgelegten Handelspaare, den Betrag pro Order und die Gültigkeitsdauer. Senden Sie „Autorisierung für automatisierten Handel beantragen“, um die Konfiguration zu starten.",
     "manual_fallback.authorization_miss_notice": "Diese Order überschreitet den Umfang der Autorisierung für den automatisierten Handel und wurde nicht gesendet.",
     "manual_fallback.generic_notice": "Diese Order wurde nicht über den automatisierten Handel gesendet.",
     "manual_fallback.order_preview": "Vollständige Order in order_preview prüfen.",

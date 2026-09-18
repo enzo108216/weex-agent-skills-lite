@@ -4,7 +4,7 @@
   "templates": {
     "confirmation.reply_text": "conferma",
     "confirmation.reply_instruction": "Per continuare, rispondi: conferma",
-    "authorization.hint": "Puoi richiedere l’autorizzazione al trading automatico per disattivare la conferma per ogni ordine. Dopo l’autorizzazione, gli ordini nell’ambito definito possono essere inviati senza conferma ogni volta.",
+    "authorization.hint": "Puoi richiedere l’autorizzazione al trading automatico per disattivare la conferma per ogni ordine. L’autorizzazione è limitata al tipo di trading, alle coppie di trading, all’importo per ordine e al periodo di validità specificati. Invia «Richiedi l’autorizzazione al trading automatico» per iniziare la configurazione.",
     "manual_fallback.authorization_miss_notice": "Questo ordine supera l’ambito dell’autorizzazione al trading automatico e non è stato inviato.",
     "manual_fallback.generic_notice": "Questo ordine non è stato inviato tramite il trading automatico.",
     "manual_fallback.order_preview": "Rivedi l'ordine completo in `order_preview`.",
@@ -45,7 +45,7 @@
     "url.shape": "{label} deve essere un URL https completo.",
     "url.userinfo": "{label} non deve includere componenti di nome utente o password.",
     "url.query_fragment": "{label} non deve includere componenti di query o frammento.",
-    "url.host": "{label} deve utilizzare un host weex.com o weex.tech; ricevuto {host!r}.",
+    "url.host": "{label} deve utilizzare un host weex.com o weex.tech e i relativi sottodomini; ricevuto {host!r}.",
     "guard.order_invalid": "I parametri dell'ordine sono incompleti o non validi.",
     "guard.pending_order_missing": "Non è stata trovata alcuna intenzione di ordine pendente.",
     "guard.pending_order_wrong_type": "L'intenzione pendente non è un ordine normale. Usa il comando di conferma TP/SL.",

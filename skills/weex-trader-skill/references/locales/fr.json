@@ -4,7 +4,7 @@
   "templates": {
     "confirmation.reply_text": "confirmer",
     "confirmation.reply_instruction": "Pour continuer, répondez : confirmer",
-    "authorization.hint": "Vous pouvez demander une autorisation de trading automatique pour désactiver la confirmation par ordre. Après autorisation, les ordres dans le périmètre défini peuvent être envoyés sans confirmation à chaque fois.",
+    "authorization.hint": "Vous pouvez demander une autorisation de trading automatique pour désactiver la confirmation par ordre. L’autorisation est limitée au type de trading, aux paires de trading, au montant par ordre et à la durée de validité spécifiés. Envoyez « Demander l’autorisation de trading automatique » pour commencer la configuration.",
     "manual_fallback.authorization_miss_notice": "Cet ordre dépasse le périmètre d’autorisation du trading automatique et n’a pas été envoyé.",
     "manual_fallback.generic_notice": "Cet ordre n’a pas été envoyé via le trading automatique.",
     "manual_fallback.order_preview": "Vérifiez l’ordre complet dans order_preview.",

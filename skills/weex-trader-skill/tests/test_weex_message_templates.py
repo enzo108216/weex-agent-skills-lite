@@ -47,6 +47,52 @@ class WeexMessageTemplateTests(unittest.TestCase):
                 }
                 self.assertEqual(en_fields, zh_fields)
 
+    def test_localized_safety_commands_keep_literal_cli_tokens(self) -> None:
+        """Safety-critical command and field names must survive translation verbatim."""
+        for locale in ("ar", "tr", "az"):
+            with self.subTest(locale=locale):
+                catalog = templates.MESSAGE_TEMPLATES[locale]
+                for template_id in (
+                    "guard.confirm_tp_sl_flag",
+                    "guard.confirm_cancel_flag",
+                ):
+                    text = catalog[template_id]
+                    self.assertIn("--confirm-live", text, template_id)
+                self.assertIn("confirm-tp-sl", catalog["guard.confirm_tp_sl_flag"])
+                self.assertIn("confirm-tp-sl", catalog["guard.confirm_tp_sl_fields_missing"])
+                self.assertIn("confirm-cancel", catalog["guard.confirm_cancel_fields_missing"])
+                self.assertIn("confirm-cancel", catalog["guard.confirm_cancel_flag"])
+                self.assertNotIn("--confirm-live", catalog["guard.confirm_tp_sl_fields_missing"])
+                self.assertNotIn("--confirm-live", catalog["guard.confirm_cancel_fields_missing"])
+                for template_id in (
+                    "guard.confirm_order_fields_missing",
+                    "guard.confirm_tp_sl_fields_missing",
+                    "guard.confirm_cancel_fields_missing",
+                ):
+                    self.assertIn("intent_id", catalog[template_id], template_id)
+                    self.assertIn("risk_signature", catalog[template_id], template_id)
+
+    def test_known_locale_labels_preserve_trading_meanings(self) -> None:
+        expected = {
+            "ar": {
+                "label.market.fallback": "تداول",
+                "action.open_long": "فتح مركز شراء طويل",
+            },
+            "tr": {
+                "label.market.spot": "spot",
+                "label.order_type.fallback": "emir",
+            },
+            "az": {
+                "label.market.spot": "spot",
+                "label.order_type.fallback": "sifariş",
+                "action.fallback": "sifariş yerləşdir",
+            },
+        }
+        for locale, entries in expected.items():
+            with self.subTest(locale=locale):
+                for template_id, text in entries.items():
+                    self.assertEqual(templates.MESSAGE_TEMPLATES[locale][template_id], text)
+
     def test_manual_fallback_is_localized_and_confirmation_bound(self) -> None:
         with self.assertRaises(weex_language.LanguageRequiredError):
             templates.build_manual_fallback_confirmation(None, authorization_miss=False)

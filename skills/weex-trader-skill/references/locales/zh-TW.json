@@ -3,7 +3,7 @@
   "fallback_locale": "en-US",
   "templates": {
     "confirmation.reply_text": "確認",
-    "confirmation.reply_instruction": "如果確認繼續，請回復：確認",
+    "confirmation.reply_instruction": "如果確認繼續，請回覆：確認",
     "authorization.hint": "如需取消二次確認功能，可申請自動交易授權。授權後，在指定交易型別、交易對、單筆金額和有效期範圍內，下單無需逐筆確認。傳送“申請自動交易授權”即可開始配置。",
     "manual_fallback.authorization_miss_notice": "本次訂單超過自動交易授權範圍，尚未下單。",
     "manual_fallback.generic_notice": "本次訂單未進入自動交易執行，尚未下單。",
@@ -14,7 +14,7 @@
     "environment.funds.real": "本次操作將使用真實資金，請謹慎確認。",
     "environment.preview": "{mode}訂單預覽已生成，訂單尚未提交。",
     "environment.notice.live": "本次操作將使用 WEEX {market} 真實交易。",
-    "environment.confirm.real": "如果確認使用真實資金提交這筆訂單，請回復：{reply_text}",
+    "environment.confirm.real": "如果確認使用真實資金提交這筆訂單，請回覆：{reply_text}",
     "label.market.futures": "合約",
     "label.market.spot": "現貨",
     "label.market.fallback": "交易",

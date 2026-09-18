@@ -4,7 +4,7 @@
   "templates": {
     "confirmation.reply_text": "확인",
     "confirmation.reply_instruction": "계속하려면 확인이라고 답변하세요.",
-    "authorization.hint": "주문별 확인을 비활성화하려면 자동 거래 승인을 요청할 수 있습니다. 승인 후 지정된 범위의 주문은 매번 확인하지 않고 제출할 수 있습니다. 자동 거래 승인 요청을 보내 설정을 시작하세요.",
+    "authorization.hint": "주문별 확인을 비활성화하려면 자동 거래 승인을 요청할 수 있습니다. 승인 후 지정된 거래 유형, 거래쌍, 주문당 금액 및 유효 기간 범위의 주문은 주문별 확인 없이 제출할 수 있습니다. 설정을 시작하려면 ‘자동 거래 승인 요청’을 보내세요.",
     "manual_fallback.authorization_miss_notice": "이 주문은 자동 거래 승인 범위를 초과하여 제출되지 않았습니다.",
     "manual_fallback.generic_notice": "이 주문은 자동 거래를 통해 제출되지 않았습니다.",
     "manual_fallback.order_preview": "order_preview의 전체 주문을 확인하세요.",
@@ -55,7 +55,7 @@
     "guard.intent_language_mismatch": "확인 언어가 미리보기 언어와 일치하지 않습니다. 미리보기를 다시 생성하세요.",
     "guard.confirm_flag_mismatch": "{mode} 확인에는 {required_flag}가 필요합니다.",
     "guard.reply_mismatch": "답변은 최신 확인 문구와 정확히 일치해야 합니다.",
-    "guard.confirm_order_fields_missing": "confirm-order에는 미리보기에서 반환된 intent_id와 risk_signature가 필요합니다.",
+    "guard.confirm_order_fields_missing": "confirm-order에는 preview-order에서 반환된 intent_id와 risk_signature가 필요합니다.",
     "guard.risk_signature_order": "대기 주문의 위험 서명이 일치하지 않습니다. 미리보기를 다시 생성하세요.",
     "guard.order_cleanup_failed": "주문은 제출되었지만 로컬 확인 상태를 삭제할 수 없습니다.",
     "guard.pending_tp_sl_missing": "대기 중인 TP/SL 의도를 찾을 수 없습니다.",
@@ -63,8 +63,8 @@
     "guard.intent_id_mismatch_tp_sl": "의도 ID가 저장된 대기 TP/SL 주문과 일치하지 않습니다.",
     "guard.pending_tp_sl_expired": "대기 TP/SL 의도가 만료되었습니다. 미리보기를 다시 생성하세요.",
     "guard.tp_sl_mode_unsupported": "TP/SL 확인은 실거래 선물에서만 지원됩니다.",
-    "guard.confirm_tp_sl_flag": "실거래 TP/SL 주문 확인에는 --confirm-live가 필요합니다.",
-    "guard.confirm_tp_sl_fields_missing": "confirm-tp-sl에는 미리보기에서 반환된 intent_id와 risk_signature가 필요합니다.",
+    "guard.confirm_tp_sl_flag": "confirm-tp-sl로 실거래 TP/SL 주문을 확인하려면 --confirm-live가 필요합니다.",
+    "guard.confirm_tp_sl_fields_missing": "confirm-tp-sl에는 preview-tp-sl에서 반환된 intent_id와 risk_signature가 필요합니다.",
     "guard.risk_signature_tp_sl": "대기 TP/SL 주문의 위험 서명이 일치하지 않습니다. 미리보기를 다시 생성하세요.",
     "guard.tp_sl_context_missing": "대기 TP/SL 의도에 주문 컨텍스트가 없습니다.",
     "guard.tp_sl_cleanup_failed": "TP/SL은 제출되었지만 로컬 확인 상태를 삭제할 수 없습니다.",
@@ -72,7 +72,7 @@
     "guard.pending_cancel_expired": "대기 취소 의도가 만료되었습니다. 미리보기를 다시 생성하세요.",
     "guard.confirm_cancel_fields_missing": "confirm-cancel에는 일치하는 intent_id와 risk_signature가 필요합니다.",
     "guard.risk_signature_cancel": "대기 취소의 위험 서명이 일치하지 않습니다.",
-    "guard.confirm_cancel_flag": "실제 취소 확인에는 --confirm-live가 필요합니다.",
+    "guard.confirm_cancel_flag": "confirm-cancel로 실제 취소를 확인하려면 --confirm-live가 필요합니다.",
     "guard.cancel_cleanup_failed": "취소는 성공했지만 로컬 확인 상태를 삭제할 수 없습니다."
   }
 }

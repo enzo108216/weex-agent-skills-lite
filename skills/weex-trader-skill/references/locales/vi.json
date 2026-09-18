@@ -4,7 +4,7 @@
   "templates": {
     "confirmation.reply_text": "xác nhận",
     "confirmation.reply_instruction": "Để tiếp tục, hãy trả lời: xác nhận",
-    "authorization.hint": "Bạn có thể yêu cầu ủy quyền giao dịch tự động để tắt xác nhận từng lệnh. Sau khi được ủy quyền, các lệnh trong phạm vi chỉ định có thể được gửi mà không cần xác nhận từng lần.",
+    "authorization.hint": "Để tắt xác nhận cho từng lệnh, bạn có thể yêu cầu ủy quyền giao dịch tự động. Sau khi được ủy quyền, các lệnh trong phạm vi loại giao dịch, cặp giao dịch, số tiền mỗi lệnh và thời hạn đã chỉ định có thể được gửi mà không cần xác nhận từng lệnh. Hãy gửi “Yêu cầu ủy quyền giao dịch tự động” để bắt đầu cấu hình.",
     "manual_fallback.authorization_miss_notice": "Lệnh này vượt phạm vi ủy quyền giao dịch tự động và chưa được gửi.",
     "manual_fallback.generic_notice": "Lệnh này chưa được gửi qua giao dịch tự động.",
     "manual_fallback.order_preview": "Hãy kiểm tra đầy đủ lệnh trong order_preview.",
@@ -55,7 +55,7 @@
     "guard.intent_language_mismatch": "Ngôn ngữ xác nhận không khớp với bản xem trước. Hãy tạo lại bản xem trước.",
     "guard.confirm_flag_mismatch": "Xác nhận {mode} yêu cầu {required_flag}.",
     "guard.reply_mismatch": "Phản hồi phải khớp chính xác với văn bản xác nhận mới nhất.",
-    "guard.confirm_order_fields_missing": "confirm-order yêu cầu intent_id và risk_signature được trả về từ bản xem trước.",
+    "guard.confirm_order_fields_missing": "confirm-order yêu cầu intent_id và risk_signature được trả về từ preview-order.",
     "guard.risk_signature_order": "Chữ ký rủi ro của lệnh đang chờ không khớp. Hãy tạo lại bản xem trước.",
     "guard.order_cleanup_failed": "Lệnh đã được gửi nhưng không thể xóa trạng thái xác nhận cục bộ.",
     "guard.pending_tp_sl_missing": "Không tìm thấy ý định TP/SL đang chờ.",
@@ -63,8 +63,8 @@
     "guard.intent_id_mismatch_tp_sl": "Intent ID không khớp với lệnh TP/SL đang chờ đã lưu.",
     "guard.pending_tp_sl_expired": "Ý định TP/SL đang chờ đã hết hạn. Hãy tạo lại bản xem trước.",
     "guard.tp_sl_mode_unsupported": "Chỉ hỗ trợ xác nhận TP/SL cho giao dịch futures thật.",
-    "guard.confirm_tp_sl_flag": "Xác nhận lệnh TP/SL thật yêu cầu --confirm-live.",
-    "guard.confirm_tp_sl_fields_missing": "confirm-tp-sl yêu cầu intent_id và risk_signature từ bản xem trước.",
+    "guard.confirm_tp_sl_flag": "Xác nhận confirm-tp-sl cho lệnh TP/SL thật yêu cầu --confirm-live.",
+    "guard.confirm_tp_sl_fields_missing": "confirm-tp-sl yêu cầu intent_id và risk_signature được trả về từ preview-tp-sl.",
     "guard.risk_signature_tp_sl": "Chữ ký rủi ro TP/SL đang chờ không khớp. Hãy tạo lại bản xem trước.",
     "guard.tp_sl_context_missing": "Ý định TP/SL đang chờ thiếu ngữ cảnh lệnh.",
     "guard.tp_sl_cleanup_failed": "TP/SL đã được gửi nhưng không thể xóa trạng thái xác nhận cục bộ.",
@@ -72,7 +72,7 @@
     "guard.pending_cancel_expired": "Ý định hủy đang chờ đã hết hạn. Hãy tạo lại bản xem trước.",
     "guard.confirm_cancel_fields_missing": "confirm-cancel yêu cầu intent_id và risk_signature khớp.",
     "guard.risk_signature_cancel": "Chữ ký rủi ro hủy đang chờ không khớp.",
-    "guard.confirm_cancel_flag": "Xác nhận hủy thật yêu cầu --confirm-live.",
+    "guard.confirm_cancel_flag": "Xác nhận confirm-cancel để hủy thật yêu cầu --confirm-live.",
     "guard.cancel_cleanup_failed": "Đã hủy thành công nhưng không thể xóa trạng thái xác nhận cục bộ."
   }
 }

@@ -4,7 +4,7 @@
   "templates": {
     "confirmation.reply_text": "confirmar",
     "confirmation.reply_instruction": "Para continuar, responda: confirmar",
-    "authorization.hint": "Pode solicitar autorização de negociação automática para desativar a confirmação por ordem. Após a autorização, as ordens dentro do âmbito definido podem ser enviadas sem confirmação individual.",
+    "authorization.hint": "Pode solicitar autorização de negociação automática para desativar a confirmação por ordem. A autorização limita-se ao tipo de negociação, aos pares de negociação, ao montante por ordem e ao período de validade especificados. Envie “Solicitar autorização para negociação automática” para iniciar a configuração.",
     "manual_fallback.authorization_miss_notice": "Esta ordem excede o âmbito da autorização de negociação automática e não foi enviada.",
     "manual_fallback.generic_notice": "Esta ordem não foi enviada através da negociação automática.",
     "manual_fallback.order_preview": "Reveja a ordem completa em `order_preview`.",
@@ -45,7 +45,7 @@
     "url.shape": "{label} tem de ser um URL https completo.",
     "url.userinfo": "{label} não pode incluir componentes de nome de utilizador ou palavra-passe.",
     "url.query_fragment": "{label} não pode incluir componentes de consulta ou fragmento.",
-    "url.host": "{label} tem de utilizar um host weex.com ou weex.tech; obtido {host!r}.",
+    "url.host": "{label} tem de utilizar um host weex.com ou weex.tech e os respetivos subdomínios; obtido {host!r}.",
     "guard.order_invalid": "Os parâmetros da ordem estão incompletos ou são inválidos.",
     "guard.pending_order_missing": "Não foi encontrada nenhuma intenção de ordem pendente.",
     "guard.pending_order_wrong_type": "A intenção pendente não é uma ordem normal. Utilize o comando de confirmação de TP/SL.",

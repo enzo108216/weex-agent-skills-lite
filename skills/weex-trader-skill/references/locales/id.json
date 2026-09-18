@@ -4,7 +4,7 @@
   "templates": {
     "confirmation.reply_text": "konfirmasi",
     "confirmation.reply_instruction": "Untuk melanjutkan, balas: konfirmasi",
-    "authorization.hint": "Anda dapat meminta otorisasi perdagangan otomatis untuk menonaktifkan konfirmasi per pesanan. Setelah disetujui, pesanan dalam cakupan yang ditentukan dapat dikirim tanpa konfirmasi setiap kali.",
+    "authorization.hint": "Untuk menonaktifkan konfirmasi per pesanan, Anda dapat meminta otorisasi perdagangan otomatis. Setelah disetujui, pesanan dalam cakupan jenis perdagangan, pasangan perdagangan, jumlah per pesanan, dan masa berlaku yang ditentukan dapat dikirim tanpa konfirmasi per pesanan. Kirim “Minta otorisasi perdagangan otomatis” untuk memulai konfigurasi.",
     "manual_fallback.authorization_miss_notice": "Pesanan ini melebihi cakupan otorisasi perdagangan otomatis dan belum dikirim.",
     "manual_fallback.generic_notice": "Pesanan ini belum dikirim melalui perdagangan otomatis.",
     "manual_fallback.order_preview": "Periksa pesanan lengkap di order_preview.",
@@ -55,7 +55,7 @@
     "guard.intent_language_mismatch": "Bahasa konfirmasi tidak cocok dengan pratinjau. Buat ulang pratinjau.",
     "guard.confirm_flag_mismatch": "Konfirmasi {mode} memerlukan {required_flag}.",
     "guard.reply_mismatch": "Balasan harus sama persis dengan teks konfirmasi terbaru.",
-    "guard.confirm_order_fields_missing": "confirm-order memerlukan intent_id dan risk_signature dari pratinjau.",
+    "guard.confirm_order_fields_missing": "confirm-order memerlukan intent_id dan risk_signature yang dikembalikan oleh preview-order.",
     "guard.risk_signature_order": "Risk signature pesanan tertunda tidak cocok. Buat ulang pratinjau.",
     "guard.order_cleanup_failed": "Pesanan telah dikirim, tetapi status konfirmasi lokal tidak dapat dihapus.",
     "guard.pending_tp_sl_missing": "Intent TP/SL tertunda tidak ditemukan.",
@@ -63,8 +63,8 @@
     "guard.intent_id_mismatch_tp_sl": "Intent ID tidak cocok dengan pesanan TP/SL tertunda yang tersimpan.",
     "guard.pending_tp_sl_expired": "Intent TP/SL tertunda telah kedaluwarsa. Buat ulang pratinjau.",
     "guard.tp_sl_mode_unsupported": "Konfirmasi TP/SL hanya didukung untuk perdagangan futures nyata.",
-    "guard.confirm_tp_sl_flag": "Konfirmasi pesanan TP/SL nyata memerlukan --confirm-live.",
-    "guard.confirm_tp_sl_fields_missing": "confirm-tp-sl memerlukan intent_id dan risk_signature dari pratinjau.",
+    "guard.confirm_tp_sl_flag": "Konfirmasi confirm-tp-sl untuk pesanan TP/SL nyata memerlukan --confirm-live.",
+    "guard.confirm_tp_sl_fields_missing": "confirm-tp-sl memerlukan intent_id dan risk_signature yang dikembalikan oleh preview-tp-sl.",
     "guard.risk_signature_tp_sl": "Risk signature TP/SL tertunda tidak cocok. Buat ulang pratinjau.",
     "guard.tp_sl_context_missing": "Intent TP/SL tertunda tidak memiliki konteks pesanan.",
     "guard.tp_sl_cleanup_failed": "TP/SL telah dikirim, tetapi status konfirmasi lokal tidak dapat dihapus.",
@@ -72,7 +72,7 @@
     "guard.pending_cancel_expired": "Intent pembatalan tertunda telah kedaluwarsa. Buat ulang pratinjau.",
     "guard.confirm_cancel_fields_missing": "confirm-cancel memerlukan intent_id dan risk_signature yang cocok.",
     "guard.risk_signature_cancel": "Risk signature pembatalan tertunda tidak cocok.",
-    "guard.confirm_cancel_flag": "Konfirmasi pembatalan nyata memerlukan --confirm-live.",
+    "guard.confirm_cancel_flag": "Konfirmasi confirm-cancel untuk pembatalan nyata memerlukan --confirm-live.",
     "guard.cancel_cleanup_failed": "Pembatalan berhasil, tetapi status konfirmasi lokal tidak dapat dihapus."
   }
 }

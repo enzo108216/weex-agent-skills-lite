@@ -45,7 +45,7 @@
     "url.shape": "{label} must be a full https URL.",
     "url.userinfo": "{label} must not include username or password components.",
     "url.query_fragment": "{label} must not include query or fragment components.",
-    "url.host": "{label} must use a weex.com or weex.tech host; got {host!r}.",
+    "url.host": "{label} must use a weex.com or weex.tech host or one of their subdomains; got {host!r}.",
     "guard.order_invalid": "Order parameters are incomplete or invalid.",
     "guard.pending_order_missing": "No pending order intent was found.",
     "guard.pending_order_wrong_type": "The pending intent is not a regular order. Use the TP/SL confirmation command.",
